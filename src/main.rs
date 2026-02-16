@@ -60,12 +60,6 @@ struct EquipTemplateInfo {
     slot: u32,
 }
 
-#[derive(Default)]
-struct EquipStatOptions {
-    main_by_slot: HashMap<u32, Vec<u32>>,
-    sub_stats: Vec<u32>,
-}
-
 #[derive(Clone)]
 struct Session {
     uid: i32,
@@ -2061,64 +2055,6 @@ fn resolve_equip_item_id(
         .by_suit_slot
         .get(&(set_id, slot))
         .copied()
-}
-
-fn load_equip_stat_options(state: &AppState, uid: u32) -> EquipStatOptions {
-    let mut options = EquipStatOptions::default();
-    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
-    let equip_index = load_equip_template_index(&state.asset_dir);
-
-    if let Ok(entries) = fs::read_dir(&equip_dir) {
-        for entry in entries.flatten() {
-            let file_name = entry.file_name();
-            let Some(file_name) = file_name.to_str() else {
-                continue;
-            };
-            if file_name == "next" {
-                continue;
-            }
-            let Some(equip_zon) = read_zon(&entry.path()) else {
-                continue;
-            };
-            let item_id = zon_get_number(&equip_zon, "id").unwrap_or(0) as u32;
-            let slot = equip_slot(item_id, equip_index);
-            let (main_key, _, _) = zon_get_main_property(&equip_zon);
-            if main_key > 0 {
-                options
-                    .main_by_slot
-                    .entry(slot)
-                    .or_default()
-                    .push(main_key);
-            }
-
-            for (key, _, _) in zon_get_sub_properties_list(&equip_zon) {
-                if key > 0 {
-                    options.sub_stats.push(key);
-                }
-            }
-        }
-    }
-
-    for values in options.main_by_slot.values_mut() {
-        values.sort_unstable();
-        values.dedup();
-    }
-    options.sub_stats.sort_unstable();
-    options.sub_stats.dedup();
-
-    if options.sub_stats.is_empty() {
-        let names = load_stat_names(state);
-        options.sub_stats = names.keys().copied().collect();
-        options.sub_stats.sort_unstable();
-    }
-
-    for slot in 1..=6 {
-        options
-            .main_by_slot
-            .entry(slot)
-            .or_insert_with(|| options.sub_stats.clone());
-    }
-    options
 }
 
 fn load_stat_names(state: &AppState) -> &'static HashMap<u32, String> {
