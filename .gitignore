@@ -1,0 +1,12 @@
+# Rust build output
+/target/
+
+# Cargo cache
+**/.cargo/
+
+# Rustfmt backup
+**/*.rs.bk
+
+# IDE/editor files
+**/.idea/
+**/.vscode/
