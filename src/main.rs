@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Form, Path, Query, State},
+    extract::{Form, OriginalUri, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -71,6 +71,12 @@ struct Session {
 struct LoginForm {
     username: String,
     password: String,
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LoginQuery {
+    next: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -206,9 +212,15 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn login_page() -> Html<&'static str> {
-    Html(
-        r#"<!doctype html>
+async fn login_page(Query(query): Query<LoginQuery>) -> Html<String> {
+    let next = query
+        .next
+        .as_deref()
+        .and_then(sanitize_next_path)
+        .unwrap_or_else(|| "/dashboard".to_string());
+    let next_attr = html_escape_attr(&next);
+
+        let body = r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -216,25 +228,33 @@ async fn login_page() -> Html<&'static str> {
   <title>Gear Editor - Login</title>
   <style>
     body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; height: 100vh; margin: 0; }
-    form { background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
-    h1 { font-size: 18px; margin: 0 0 16px; }
-    label { display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }
-    input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }
-    button { margin-top: 16px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }
+    form { background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 12px; }
+    h1 { font-size: 18px; margin: 0; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    label { display: block; margin: 0; font-size: 12px; color: #9aa4b2; }
+    input { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }
+    button { width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }
   </style>
 </head>
 <body>
   <form method="post" action="/login">
     <h1>Gear Editor</h1>
-    <label for="username">Username</label>
-    <input id="username" name="username" autocomplete="username" required />
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <input type="hidden" name="next" value="{next_attr}" />
+        <div class="field">
+            <label for="username">Username</label>
+            <input id="username" name="username" autocomplete="username" required />
+        </div>
+        <div class="field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required />
+        </div>
     <button type="submit">Sign in</button>
   </form>
 </body>
-</html>"#,
-    )
+</html>"#
+    .replace("{next_attr}", &next_attr);
+
+    Html(body)
 }
 
 async fn login(State(state): State<AppState>, Form(payload): Form<LoginForm>) -> impl IntoResponse {
@@ -252,7 +272,12 @@ async fn login(State(state): State<AppState>, Form(payload): Form<LoginForm>) ->
                     .unwrap(),
             );
 
-            (headers, Redirect::to("/dashboard")).into_response()
+            let next = payload
+                .next
+                .as_deref()
+                .and_then(sanitize_next_path)
+                .unwrap_or_else(|| "/dashboard".to_string());
+            (headers, Redirect::to(&next)).into_response()
         }
         Ok(None) => (StatusCode::UNAUTHORIZED, Html("Invalid credentials")).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Html("Login failed")).into_response(),
@@ -265,9 +290,10 @@ async fn dashboard(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<TabQuery>,
+    original_uri: OriginalUri,
 ) -> impl IntoResponse {
     let Some((session_id, session)) = get_session(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
@@ -302,6 +328,10 @@ async fn dashboard(
         .panel {{ background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
         .panel h3 {{ margin: 0; font-size: 14px; }}
         .panel a {{ display: inline-block; padding: 8px 12px; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; text-decoration: none; }}
+        .panel form {{ width: 100%; }}
+        .panel label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
+        .panel input, .panel select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+        .panel button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
         .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
     .apply {{ background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
     .pill {{ display: inline-block; padding: 4px 8px; background: #2a3140; border-radius: 999px; font-size: 12px; color: #9aa4b2; }}
@@ -351,9 +381,10 @@ async fn avatar_edit(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(avatar_id): Path<u32>,
+    original_uri: OriginalUri,
 ) -> impl IntoResponse {
     let Some((_session_id, session)) = get_session(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -462,10 +493,11 @@ async fn avatar_update(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(avatar_id): Path<u32>,
+    original_uri: OriginalUri,
     Form(payload): Form<AvatarUpdateForm>,
 ) -> impl IntoResponse {
     let Some((session_id, mut session)) = get_session_mut(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -526,9 +558,10 @@ async fn weapon_edit(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(weapon_uid): Path<u32>,
+    original_uri: OriginalUri,
 ) -> impl IntoResponse {
     let Some((_session_id, session)) = get_session(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -609,10 +642,11 @@ async fn weapon_update(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(weapon_uid): Path<u32>,
+    original_uri: OriginalUri,
     Form(payload): Form<WeaponUpdateForm>,
 ) -> impl IntoResponse {
     let Some((session_id, mut session)) = get_session_mut(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -637,9 +671,10 @@ async fn weapon_update(
 async fn weapon_new(
         State(state): State<AppState>,
         headers: HeaderMap,
+    original_uri: OriginalUri,
 ) -> impl IntoResponse {
         let Some((_session_id, _session)) = get_session(&headers) else {
-                return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
         };
 
         let options = render_weapon_select_options(&state, 0);
@@ -690,10 +725,11 @@ async fn weapon_new(
 async fn weapon_add(
     State(state): State<AppState>,
     headers: HeaderMap,
+    original_uri: OriginalUri,
     Form(payload): Form<AddWeaponForm>,
 ) -> impl IntoResponse {
     let Some((session_id, session)) = get_session_mut(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -740,9 +776,10 @@ async fn bangboo_edit(
         State(state): State<AppState>,
         headers: HeaderMap,
         Path(bangboo_uid): Path<u32>,
+    original_uri: OriginalUri,
 ) -> impl IntoResponse {
         let Some((_session_id, session)) = get_session(&headers) else {
-                return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
         };
 
         let uid = resolve_player_uid(&state, session.uid);
@@ -835,10 +872,11 @@ async fn bangboo_update(
         State(state): State<AppState>,
         headers: HeaderMap,
         Path(bangboo_uid): Path<u32>,
+    original_uri: OriginalUri,
         Form(payload): Form<BangbooUpdateForm>,
 ) -> impl IntoResponse {
         let Some((session_id, mut session)) = get_session_mut(&headers) else {
-                return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
         };
 
         let uid = resolve_player_uid(&state, session.uid);
@@ -871,10 +909,11 @@ async fn bangboo_update(
 async fn da_shiyu_update(
     State(state): State<AppState>,
     headers: HeaderMap,
+    original_uri: OriginalUri,
     Form(payload): Form<DaShiyuForm>,
 ) -> impl IntoResponse {
     let Some((session_id, mut session)) = get_session_mut(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -902,9 +941,10 @@ async fn equip_edit(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(equip_uid): Path<u32>,
+    original_uri: OriginalUri,
 ) -> impl IntoResponse {
     let Some((_session_id, session)) = get_session(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -940,6 +980,24 @@ async fn equip_edit(
         main_options.first().copied().unwrap_or(0)
     });
     let sub_options = disk_sub_stat_options(normalized_main_key);
+    let mut sub_options_by_main = HashMap::new();
+    let mut label_map = HashMap::new();
+    for slot_id in 1..=6 {
+        let options = disk_main_stat_options(slot_id);
+        for key in options {
+            label_map.entry(key).or_insert_with(|| stat_label(&state, key));
+            let sub_opts = disk_sub_stat_options(key);
+            for sub_key in &sub_opts {
+                label_map
+                    .entry(*sub_key)
+                    .or_insert_with(|| stat_label(&state, *sub_key));
+            }
+            sub_options_by_main.insert(key, sub_opts);
+        }
+    }
+    let sub_options_by_main_json = serde_json::to_string(&sub_options_by_main).unwrap_or_default();
+    let label_map_json = serde_json::to_string(&label_map).unwrap_or_default();
+    let script = render_equip_substat_script("{}", &sub_options_by_main_json, &label_map_json);
     let warning = "";
 
     let body = format!(
@@ -952,7 +1010,7 @@ async fn equip_edit(
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
     .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-    input {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+    input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
     label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
     button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
     .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
@@ -979,7 +1037,7 @@ async fn equip_edit(
             <div class="row">
                 <div>
                     <label>Stat</label>
-                    <select name="main_key">
+                    <select name="main_key" id="main_key">
                         {main_options}
                     </select>
                 </div>
@@ -989,6 +1047,7 @@ async fn equip_edit(
             <div class="row">
                 {sub_stat_rows}
             </div>
+        {script}
       {warning}
 
       <button type="submit">Save (pending)</button>
@@ -1004,6 +1063,7 @@ async fn equip_edit(
         level = level,
         main_options = render_stat_select_options(&state, &main_options, normalized_main_key),
         sub_stat_rows = render_sub_stat_rows(&state, &sub_props, &sub_options, normalized_main_key),
+        script = script,
         warning = warning,
     );
 
@@ -1014,10 +1074,11 @@ async fn equip_update(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(equip_uid): Path<u32>,
+    original_uri: OriginalUri,
     Form(payload): Form<EquipUpdateForm>,
 ) -> impl IntoResponse {
     let Some((session_id, mut session)) = get_session_mut(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -1103,9 +1164,10 @@ async fn equip_update(
 async fn equip_new(
         State(state): State<AppState>,
         headers: HeaderMap,
+    original_uri: OriginalUri,
 ) -> impl IntoResponse {
         let Some((_session_id, _session)) = get_session(&headers) else {
-                return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
         };
 
         let options = render_disc_select_options(&state, 0);
@@ -1132,7 +1194,7 @@ async fn equip_new(
         let main_options_by_slot_json = serde_json::to_string(&main_options_by_slot).unwrap_or_default();
         let sub_options_by_main_json = serde_json::to_string(&sub_options_by_main).unwrap_or_default();
         let label_map_json = serde_json::to_string(&label_map).unwrap_or_default();
-        let script = render_new_equip_script(
+        let script = render_equip_substat_script(
             &main_options_by_slot_json,
             &sub_options_by_main_json,
             &label_map_json,
@@ -1206,10 +1268,11 @@ async fn equip_new(
 async fn equip_add(
     State(state): State<AppState>,
     headers: HeaderMap,
+    original_uri: OriginalUri,
     Form(payload): Form<AddEquipForm>,
 ) -> impl IntoResponse {
     let Some((session_id, session)) = get_session_mut(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     let uid = resolve_player_uid(&state, session.uid);
@@ -1325,12 +1388,12 @@ async fn equip_add(
     }
 
     set_session(session_id, session);
-    Redirect::to(&format!("/equip/{new_uid}")).into_response()
+    Redirect::to("/dashboard?tab=discs").into_response()
 }
 
-async fn apply_changes(headers: HeaderMap) -> impl IntoResponse {
+async fn apply_changes(headers: HeaderMap, original_uri: OriginalUri) -> impl IntoResponse {
     let Some((session_id, mut session)) = get_session_mut(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Html("Please log in")).into_response();
+        return redirect_to_login(&original_uri.0);
     };
 
     for (path, content) in session.pending_writes.drain() {
@@ -1466,7 +1529,7 @@ fn render_equip_cards(state: &AppState, uid: u32) -> String {
     let hakushin = load_hakushin_data(state);
     let equip_index = load_equip_template_index(&state.asset_dir);
 
-    let mut cards = String::new();
+    let mut cards_data = Vec::new();
     if let Ok(entries) = fs::read_dir(&equip_dir) {
         for entry in entries.flatten() {
             let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
@@ -1511,7 +1574,7 @@ fn render_equip_cards(state: &AppState, uid: u32) -> String {
                 .map(to_asset_url)
                 .unwrap_or_else(|| svg_data_uri(&name));
             let main_label = stat_label(state, main_stat.0);
-            cards.push_str(&format!(
+            let card_html = format!(
                 "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Slot {slot} · Level {level}</div><div class=\"meta\">Main: {main_label} ({main_base}+{main_add})</div></a>",
                 uid = equip_uid,
                 name = name,
@@ -1521,8 +1584,15 @@ fn render_equip_cards(state: &AppState, uid: u32) -> String {
                 main_base = main_stat.1,
                 main_add = main_stat.2,
                 img = img
-            ));
+            );
+            cards_data.push((equip_item_id, equip_uid, card_html));
         }
+    }
+
+    cards_data.sort_by_key(|(equip_item_id, equip_uid, _)| (*equip_item_id, *equip_uid));
+    let mut cards = String::new();
+    for (_, _, card_html) in cards_data {
+        cards.push_str(&card_html);
     }
 
     if cards.is_empty() {
@@ -1608,27 +1678,20 @@ fn render_da_shiyu_panel(state: &AppState, uid: u32) -> String {
 
         format!(
                 r#"<div class="panel">
-    <div>
-        <h3>DA and Shiyu</h3>
-        <div class="meta">Edit Hadal Zone entrances for player {uid}</div>
-    </div>
-</div>
-<div class="panel">
     <form method="post" action="/da-shiyu">
         <div class="row">
             <div>
-                <label>Shiyu (id=1 zone_id)</label>
+                <label>Shiyu ID</label>
                 <input name="shiyu_zone_id" type="number" min="0" value="{shiyu_zone_id}" />
             </div>
             <div>
-                <label>Deadly Assault (id=9 zone_id)</label>
+                <label>Deadly Assault ID</label>
                 <input name="deadly_assault_zone_id" type="number" min="0" value="{deadly_assault_zone_id}" />
             </div>
         </div>
-        <button type="submit" style="margin-top:12px;">Save (pending)</button>
+        <button type="submit">Save (pending)</button>
     </form>
 </div>"#,
-                uid = uid,
                 shiyu_zone_id = shiyu_zone_id,
                 deadly_assault_zone_id = deadly_assault_zone_id,
         )
@@ -1952,6 +2015,51 @@ fn get_session_mut(headers: &HeaderMap) -> Option<(String, Session)> {
 fn set_session(session_id: String, session: Session) {
     let store = SESSION_STORE.get_or_init(|| Mutex::new(HashMap::new()));
     store.lock().unwrap().insert(session_id, session);
+}
+
+fn sanitize_next_path(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.starts_with('/') || trimmed.starts_with("//") {
+        return None;
+    }
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn url_encode_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    out
+}
+
+fn html_escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn redirect_to_login(original_uri: &axum::http::Uri) -> Response {
+    let attempted = original_uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/dashboard");
+    let next = sanitize_next_path(attempted).unwrap_or_else(|| "/dashboard".to_string());
+    let location = format!("/?next={}", url_encode_component(&next));
+    Redirect::to(&location).into_response()
 }
 
 fn read_next_uid(dir: &FsPath) -> Option<u32> {
@@ -2294,14 +2402,23 @@ fn disk_sub_stat_options(main_key: u32) -> Vec<u32> {
     ];
 
     match main_key {
+        STAT_HP => {
+            options.retain(|key| *key != STAT_HP);
+        }
+        STAT_ATK => {
+            options.retain(|key| *key != STAT_ATK);
+        }
+        STAT_DEF => {
+            options.retain(|key| *key != STAT_DEF);
+        }
         STAT_HP_PCT => {
-            options.retain(|key| *key != STAT_HP && *key != STAT_HP_PCT);
+            options.retain(|key| *key != STAT_HP_PCT);
         }
         STAT_ATK_PCT => {
-            options.retain(|key| *key != STAT_ATK && *key != STAT_ATK_PCT);
+            options.retain(|key| *key != STAT_ATK_PCT);
         }
         STAT_DEF_PCT => {
-            options.retain(|key| *key != STAT_DEF && *key != STAT_DEF_PCT);
+            options.retain(|key| *key != STAT_DEF_PCT);
         }
         STAT_CRIT_RATE => {
             options.retain(|key| *key != STAT_CRIT_RATE);
@@ -2381,7 +2498,7 @@ fn render_sub_stat_rows(
     rows
 }
 
-fn render_new_equip_script(
+fn render_equip_substat_script(
     main_options_by_slot_json: &str,
     sub_options_by_main_json: &str,
     label_map_json: &str,
@@ -2415,23 +2532,48 @@ fn render_new_equip_script(
     script.push_str("};\n\n");
 
     script.push_str("const updateSubOptions = () => {\n");
-    script.push_str("  const mainKey = Number(mainSelect.value);\n");
+    script.push_str("  const mainKey = Number(mainSelect?.value ?? 0);\n");
     script.push_str("  const subKeys = subOptionsByMain[mainKey] ?? [];\n");
+    script.push_str("  const nextValues = [];\n");
     script.push_str("  for (const select of subSelects) {\n");
-    script.push_str("    const current = select.value;\n");
-    script.push_str("    renderOptions(select, subKeys, subKeys.includes(Number(current)) ? current : subKeys[0]);\n");
+    script.push_str("    const current = Number(select.value);\n");
+    script.push_str("    let chosen = current;\n");
+    script.push_str("    if (!subKeys.includes(chosen) || nextValues.includes(chosen)) {\n");
+    script.push_str("      chosen = subKeys.find((key) => !nextValues.includes(key));\n");
+    script.push_str("      if (chosen === undefined) {\n");
+    script.push_str("        chosen = subKeys[0] ?? 0;\n");
+    script.push_str("      }\n");
+    script.push_str("    }\n");
+    script.push_str("    nextValues.push(chosen);\n");
     script.push_str("  }\n");
+    script.push_str("  subSelects.forEach((select, idx) => {\n");
+    script.push_str("    renderOptions(select, subKeys, nextValues[idx]);\n");
+    script.push_str("  });\n");
     script.push_str("};\n\n");
 
     script.push_str("const updateMainOptions = () => {\n");
-    script.push_str("  const slot = Number(slotSelect.value);\n");
-    script.push_str("  const keys = mainOptionsBySlot[slot] ?? [];\n");
-    script.push_str("  renderOptions(mainSelect, keys, keys[0]);\n");
+    script.push_str("  if (!mainSelect) {\n");
+    script.push_str("    return;\n");
+    script.push_str("  }\n");
+    script.push_str("  if (slotSelect) {\n");
+    script.push_str("    const slot = Number(slotSelect.value);\n");
+    script.push_str("    const keys = mainOptionsBySlot[slot] ?? [];\n");
+    script.push_str("    const current = Number(mainSelect.value);\n");
+    script.push_str("    const selected = keys.includes(current) ? current : (keys[0] ?? 0);\n");
+    script.push_str("    renderOptions(mainSelect, keys, selected);\n");
+    script.push_str("  }\n");
     script.push_str("  updateSubOptions();\n");
     script.push_str("};\n\n");
 
-    script.push_str("slotSelect.addEventListener(\"change\", updateMainOptions);\n");
-    script.push_str("mainSelect.addEventListener(\"change\", updateSubOptions);\n");
+    script.push_str("if (slotSelect) {\n");
+    script.push_str("  slotSelect.addEventListener(\"change\", updateMainOptions);\n");
+    script.push_str("}\n");
+    script.push_str("if (mainSelect) {\n");
+    script.push_str("  mainSelect.addEventListener(\"change\", updateSubOptions);\n");
+    script.push_str("}\n");
+    script.push_str("for (const select of subSelects) {\n");
+    script.push_str("  select.addEventListener(\"change\", updateSubOptions);\n");
+    script.push_str("}\n");
     script.push_str("updateMainOptions();\n");
     script.push_str("</script>");
     script
