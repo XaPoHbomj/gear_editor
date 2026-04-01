@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Form, OriginalUri, Path, Query, State},
+    extract::{Form, OriginalUri, Path, Query, RawForm, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -8,7 +8,7 @@ use axum::{
 };
 use password_hash::PasswordHash;
 use pbkdf2::Pbkdf2;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distributions::Alphanumeric, seq::SliceRandom, Rng};
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -87,6 +87,7 @@ struct SdkConfig {
 #[derive(Deserialize)]
 struct TabQuery {
     tab: Option<String>,
+    delete: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +161,13 @@ struct AddEquipForm {
 }
 
 #[derive(Deserialize)]
+struct GenerateEquipForm {
+    equip_set_id: u32,
+    slot: Option<u32>,
+    count: u32,
+}
+
+#[derive(Deserialize)]
 struct DaShiyuForm {
     shiyu_zone_id: u32,
     deadly_assault_zone_id: u32,
@@ -197,6 +205,8 @@ async fn main() {
         .route("/weapon/new", get(weapon_new).post(weapon_add))
         .route("/equip/:uid", get(equip_edit).post(equip_update))
         .route("/equip/new", get(equip_new).post(equip_add))
+        .route("/equip/generate", get(equip_generate).post(equip_generate_submit))
+        .route("/equip/delete", post(equip_delete_submit))
         .route("/bangboo/:uid", get(bangboo_edit).post(bangboo_update))
         .route("/da-shiyu", post(da_shiyu_update))
         .route("/apply", post(apply_changes))
@@ -297,11 +307,12 @@ async fn dashboard(
     };
 
     let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
+    let delete_mode = query.delete.unwrap_or(0) == 1;
     let uid = resolve_player_uid(&state, session.uid);
 
     let avatar_cards = render_avatar_cards(&state, uid);
     let weapon_cards = render_weapon_cards(&state, uid);
-    let equip_cards = render_equip_cards(&state, uid);
+    let equip_cards = render_equip_cards(&state, uid, delete_mode);
     let bangboo_cards = render_bangboo_cards(&state, uid);
     let da_shiyu_panel = render_da_shiyu_panel(&state, uid);
 
@@ -335,6 +346,9 @@ async fn dashboard(
         .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
     .apply {{ background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
     .pill {{ display: inline-block; padding: 4px 8px; background: #2a3140; border-radius: 999px; font-size: 12px; color: #9aa4b2; }}
+        .danger {{ background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
+        .select-card {{ cursor: pointer; }}
+        .select-card input[type="checkbox"] {{ width: auto; margin-bottom: 10px; }}
   </style>
 </head>
 <body>
@@ -1391,6 +1405,272 @@ async fn equip_add(
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
+async fn equip_generate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+) -> impl IntoResponse {
+    let Some((_session_id, _session)) = get_session(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let options = render_disc_select_options(&state, 0);
+    let slot_options = render_generate_slot_options(None);
+    let body = format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Generate Discs</title>
+    <style>
+        body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
+        .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
+        input[type="number"], select {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+        label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
+        button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
+        .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+        .meta {{ color: #9aa4b2; font-size: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Generate Discs</h1>
+        <div class="meta">Each generated disc uses valid slot/main stat combinations, 4 unique substats, and total procs in range 8-9.</div>
+        <form method="post">
+            <div>
+                <label>Disc set</label>
+                <select name="equip_set_id" required>
+                    {options}
+                </select>
+            </div>
+            <div class="row">
+                <div>
+                    <label>Slot</label>
+                    <select name="slot">
+                        {slot_options}
+                    </select>
+                </div>
+                <div>
+                    <label>Count</label>
+                    <input name="count" type="number" min="1" max="200" value="10" required />
+                </div>
+            </div>
+            <button type="submit">Generate</button>
+        </form>
+    </div>
+</body>
+</html>"#,
+        options = options,
+    slot_options = slot_options,
+    );
+
+    Html(body).into_response()
+}
+
+async fn equip_generate_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+    Form(payload): Form<GenerateEquipForm>,
+) -> impl IntoResponse {
+    let Some((session_id, session)) = get_session_mut(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    if payload.count == 0 || payload.count > 200 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("Count must be between 1 and 200"),
+        )
+            .into_response();
+    }
+    let selected_slot = payload.slot.unwrap_or(0);
+    if selected_slot > 6 {
+        return (StatusCode::BAD_REQUEST, Html("Slot must be 0..6")).into_response();
+    }
+
+    let uid = resolve_player_uid(&state, session.uid);
+    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
+    let equip_index = load_equip_template_index(&state.asset_dir);
+    let mut next_uid = read_next_uid(&equip_dir).unwrap_or(1).max(1);
+    let mut rng = rand::thread_rng();
+
+    for _ in 0..payload.count {
+        let equip = match generate_random_disc(payload.equip_set_id, selected_slot, equip_index, &mut rng) {
+            Ok(value) => value,
+            Err(message) => return (StatusCode::BAD_REQUEST, Html(message)).into_response(),
+        };
+
+        let equip_path = equip_dir.join(next_uid.to_string());
+        let serialized = format_zon_pretty(&zon_serialize(&equip));
+        if let Some(parent) = equip_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Err(err) = fs::write(&equip_path, serialized) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!("Failed to create generated disc: {}", err)),
+            )
+                .into_response();
+        }
+
+        next_uid += 1;
+    }
+
+    let next_path = equip_dir.join("next");
+    if let Err(err) = fs::write(&next_path, format!("{}\n", next_uid)) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!("Failed to update disc counter: {}", err)),
+        )
+            .into_response();
+    }
+
+    set_session(session_id, session);
+    Redirect::to("/dashboard?tab=discs").into_response()
+}
+
+async fn equip_delete_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+    RawForm(raw_form): RawForm,
+) -> impl IntoResponse {
+    let Some((session_id, mut session)) = get_session_mut(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let uid = resolve_player_uid(&state, session.uid);
+    let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
+    let selected = parse_selected_equip_uids(&raw_form_text);
+
+    for equip_uid in selected {
+        let primary_path = state
+            .state_dir
+            .join(format!("player/{uid}/equip/{equip_uid}"));
+        let zon_path = state
+            .state_dir
+            .join(format!("player/{uid}/equip/{equip_uid}.zon"));
+
+        if primary_path.exists() {
+            let _ = fs::remove_file(&primary_path);
+        }
+        if zon_path.exists() {
+            let _ = fs::remove_file(&zon_path);
+        }
+
+        session.pending_writes.remove(&primary_path);
+        session.pending_writes.remove(&zon_path);
+    }
+
+    set_session(session_id, session);
+    Redirect::to("/dashboard?tab=discs").into_response()
+}
+
+fn parse_selected_equip_uids(raw_form: &str) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for pair in raw_form.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next().unwrap_or("");
+        let value = parts.next().unwrap_or("");
+        if key == "equip_uids" || key == "equip_uids[]" || key == "equip_uids%5B%5D" {
+            if let Ok(id) = value.parse::<u32>() {
+                ids.push(id);
+            }
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn generate_random_disc(
+    set_id: u32,
+    selected_slot: u32,
+    equip_index: &EquipTemplateIndex,
+    rng: &mut impl Rng,
+) -> Result<ZValue, String> {
+    let mut slots = Vec::new();
+    for slot in 1..=6 {
+        if resolve_equip_item_id(set_id, slot, equip_index).is_some() {
+            slots.push(slot);
+        }
+    }
+    if slots.is_empty() {
+        return Err("Invalid disc set".to_string());
+    }
+
+    let slot = if selected_slot == 0 {
+        *slots.choose(rng).ok_or_else(|| "No slots for disc set".to_string())?
+    } else {
+        if !(1..=6).contains(&selected_slot) {
+            return Err("Invalid slot".to_string());
+        }
+        if !slots.contains(&selected_slot) {
+            return Err("Selected slot is not available for this disc set".to_string());
+        }
+        selected_slot
+    };
+    let item_id = resolve_equip_item_id(set_id, slot, equip_index)
+        .map(force_disc_fourth_digit)
+        .ok_or_else(|| "Invalid disc set/slot combination".to_string())?;
+
+    let main_options = disk_main_stat_options(slot);
+    let main_key = *main_options
+        .choose(rng)
+        .ok_or_else(|| "No valid main stats for selected slot".to_string())?;
+    let main_base = disk_main_base_value(main_key).unwrap_or(0);
+
+    let mut allowed_subs = disk_sub_stat_options(main_key);
+    if allowed_subs.len() < 4 {
+        return Err("Not enough valid substats for selected main stat".to_string());
+    }
+    allowed_subs.shuffle(rng);
+    let keys: Vec<u32> = allowed_subs.into_iter().take(4).collect();
+
+    let base: Vec<u32> = keys
+        .iter()
+        .map(|key| disk_sub_base_value(*key).unwrap_or(0))
+        .collect();
+    let mut add = vec![1u32; 4];
+    let target_total = rng.gen_range(8..=9);
+    while add.iter().sum::<u32>() < target_total {
+        let candidates: Vec<usize> = add
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, value)| if *value < 6 { Some(idx) } else { None })
+            .collect();
+        if candidates.is_empty() {
+            break;
+        }
+        let idx = *candidates
+            .choose(rng)
+            .ok_or_else(|| "Failed to choose substat proc target".to_string())?;
+        add[idx] += 1;
+    }
+
+    let mut equip = ZValue::Object(vec![
+        ("id".to_string(), ZValue::Number(item_id as i64)),
+        ("level".to_string(), ZValue::Number(15)),
+        ("exp".to_string(), ZValue::Number(0)),
+        ("lock".to_string(), ZValue::Bool(false)),
+        ("star".to_string(), ZValue::Number(1)),
+        (
+            "properties".to_string(),
+            ZValue::Array(vec![ZValue::Object(vec![
+                ("add_value".to_string(), ZValue::Number(0)),
+                ("base_value".to_string(), ZValue::Number(main_base as i64)),
+                ("key".to_string(), ZValue::Number(main_key as i64)),
+            ])]),
+        ),
+        ("sub_properties".to_string(), ZValue::Array(Vec::new())),
+    ]);
+
+    zon_set_sub_properties(&mut equip, &keys, &base, &add);
+    Ok(equip)
+}
+
 async fn apply_changes(headers: HeaderMap, original_uri: OriginalUri) -> impl IntoResponse {
     let Some((session_id, mut session)) = get_session_mut(&headers) else {
         return redirect_to_login(&original_uri.0);
@@ -1523,7 +1803,7 @@ fn render_weapon_cards(state: &AppState, uid: u32) -> String {
     format!("{add_panel}<div class=\"cards\">{cards}</div>")
 }
 
-fn render_equip_cards(state: &AppState, uid: u32) -> String {
+fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool) -> String {
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let equip_templates = load_equip_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state);
@@ -1574,17 +1854,42 @@ fn render_equip_cards(state: &AppState, uid: u32) -> String {
                 .map(to_asset_url)
                 .unwrap_or_else(|| svg_data_uri(&name));
             let main_label = stat_label(state, main_stat.0);
-            let card_html = format!(
-                "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Slot {slot} · Level {level}</div><div class=\"meta\">Main: {main_label} ({main_base}+{main_add})</div></a>",
-                uid = equip_uid,
-                name = name,
-                level = level,
-                slot = slot,
-                main_label = main_label,
-                main_base = main_stat.1,
-                main_add = main_stat.2,
-                img = img
-            );
+            let sub_stats = equip
+                .as_ref()
+                .map(zon_get_sub_properties_list)
+                .unwrap_or_default();
+            let sub_stats_text = if sub_stats.is_empty() {
+                "None".to_string()
+            } else {
+                sub_stats
+                    .iter()
+                    .map(|(key, _, procs)| format!("{} x{}", stat_label(state, *key), procs))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let card_html = if delete_mode {
+                format!(
+                    "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                    uid = equip_uid,
+                    name = name,
+                    level = level,
+                    slot = slot,
+                    main_label = main_label,
+                    sub_stats_text = sub_stats_text,
+                    img = img
+                )
+            } else {
+                format!(
+                    "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></a>",
+                    uid = equip_uid,
+                    name = name,
+                    level = level,
+                    slot = slot,
+                    main_label = main_label,
+                    sub_stats_text = sub_stats_text,
+                    img = img
+                )
+            };
             cards_data.push((equip_item_id, equip_uid, card_html));
         }
     }
@@ -1599,8 +1904,15 @@ fn render_equip_cards(state: &AppState, uid: u32) -> String {
         cards.push_str("<p class=\"meta\">No discs found for this account.</p>");
     }
 
-    let add_panel = render_add_equip_panel(state);
-    format!("{add_panel}<div class=\"cards\">{cards}</div>")
+    let add_panel = render_add_equip_panel(state, delete_mode);
+    if delete_mode {
+        let delete_panel = "<div class=\"panel\"><h3>Delete Mode</h3><div style=\"display:flex; gap:8px;\"><button class=\"danger\" type=\"submit\">Delete selected discs</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
+        format!(
+            "{add_panel}<form method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('Delete selected discs?');\">{delete_panel}<div class=\"cards\">{cards}</div></form>",
+        )
+    } else {
+        format!("{add_panel}<div class=\"cards\">{cards}</div>")
+    }
 }
 
 fn render_bangboo_cards(state: &AppState, uid: u32) -> String {
@@ -1703,10 +2015,32 @@ fn render_add_weapon_panel(state: &AppState) -> String {
                 .to_string()
 }
 
-fn render_add_equip_panel(state: &AppState) -> String {
+fn render_add_equip_panel(state: &AppState, delete_mode: bool) -> String {
         let _ = state;
-        "<div class=\"panel\"><h3>Add Disc</h3><a href=\"/equip/new\">New disc</a></div>"
-                .to_string()
+    if delete_mode {
+        "<div class=\"panel\"><h3>Discs</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs\">Exit delete mode</a></div></div>"
+            .to_string()
+    } else {
+        "<div class=\"panel\"><h3>Add Disc</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs&delete=1\">Delete discs</a></div></div>"
+            .to_string()
+    }
+}
+
+fn render_generate_slot_options(selected: Option<u32>) -> String {
+    let mut html = String::new();
+    html.push_str(&format!(
+        "<option value=\"\"{}>Not selected (random)</option>",
+        if selected.is_none() { " selected" } else { "" }
+    ));
+    for slot in 1..=6 {
+        html.push_str(&format!(
+            "<option value=\"{}\"{}>Slot {}</option>",
+            slot,
+            if selected == Some(slot) { " selected" } else { "" },
+            slot
+        ));
+    }
+    html
 }
 
 fn render_skill_inputs(skill_levels: &HashMap<String, u32>, core_ability: u32) -> String {
