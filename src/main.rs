@@ -3209,7 +3209,14 @@ fn to_asset_url(path: &str) -> String {
             .next()
             .unwrap_or(path)
             .trim();
-        return format!("/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{file_name}");
+        let stem = FsPath::new(file_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(file_name);
+        return format!("/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{stem}.webp");
+    }
+    if !path.contains('/') && !path.contains('.') {
+        return format!("/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{path}.webp");
     }
     format!("/assets/{}", path.trim_start_matches('/'))
 }
@@ -3279,12 +3286,8 @@ fn load_hakushin_list(
         let mut image_local = None;
         for key in image_keys {
             if let Some(value) = item.get(*key).and_then(|v| v.as_str()) {
-                if value.starts_with("http://") || value.starts_with("https://") {
-                    image_local = Some(value.to_string());
-                    break;
-                }
-                if root_dir.join(value).exists() {
-                    image_local = Some(value.to_string());
+                if let Some(local_path) = normalize_image_reference(root_dir, value) {
+                    image_local = Some(local_path);
                     break;
                 }
             }
@@ -3300,6 +3303,58 @@ fn load_hakushin_list(
     }
 
     result
+}
+
+fn normalize_image_reference(root_dir: &FsPath, value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with("/assets/") {
+        return Some(trimmed.trim_start_matches('/').to_string());
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let file_name = trimmed
+            .rsplit('/')
+            .next()
+            .unwrap_or(trimmed)
+            .split('?')
+            .next()
+            .unwrap_or(trimmed)
+            .trim();
+        let stem = FsPath::new(file_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(file_name)
+            .trim();
+        if stem.is_empty() {
+            return None;
+        }
+        let candidate = format!("zzz_dump/assets/static.nanoka.cc/zzz/UI/{stem}.webp");
+        return root_dir.join(&candidate).exists().then_some(candidate);
+    }
+
+    if root_dir.join(trimmed).exists() {
+        return Some(trimmed.to_string());
+    }
+
+    let file_name = FsPath::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed);
+    let stem = FsPath::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file_name)
+        .trim();
+    if stem.is_empty() {
+        return None;
+    }
+
+    let candidate = format!("zzz_dump/assets/static.nanoka.cc/zzz/UI/{stem}.webp");
+    root_dir.join(&candidate).exists().then_some(candidate)
 }
 fn validate_login(db_path: &FsPath, username: &str, password: &str) -> Result<Option<Session>, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
