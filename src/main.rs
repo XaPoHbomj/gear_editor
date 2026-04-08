@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Form, OriginalUri, Path, Query, RawForm, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -20,6 +20,8 @@ use std::{
     path::{Path as FsPath, PathBuf},
     sync::{Mutex, OnceLock},
 };
+use tokio::fs::File;
+use tokio_util::io::ReaderStream;
 
 static SESSION_STORE: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
 static HAKUSHIN_DATA: OnceLock<Mutex<Option<(u64, HakushinData)>>> = OnceLock::new();
@@ -30,9 +32,17 @@ static STAT_NAMES: OnceLock<HashMap<u32, String>> = OnceLock::new();
 struct AppState {
     db_path: PathBuf,
     state_dir: PathBuf,
+    prod_state_dir: PathBuf,
     asset_dir: PathBuf,
+    prod_asset_dir: PathBuf,
     dump_dir: PathBuf,
     root_dir: PathBuf,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ServerMode {
+    Beta,
+    Prod,
 }
 
 #[derive(Default, Clone)]
@@ -179,6 +189,19 @@ struct ShiyuDetailQuery {
     floor: Option<u32>,
 }
 
+#[derive(Deserialize)]
+struct SwitchServerQuery {
+    target: Option<String>,
+    next: Option<String>,
+}
+
+struct UpdateFileInfo {
+    file_name: String,
+    relative_path: String,
+    size_bytes: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
 #[tokio::main]
 async fn main() {
     let config_path = resolve_sdk_config_path();
@@ -189,7 +212,13 @@ async fn main() {
     let state_dir = env::var("GEAR_STATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("yoshunko/state"));
+    let prod_state_dir = env::var("GEAR_STATE_DIR_PROD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("yoshunko_prod/state"));
     let asset_dir = root.join("yoshunko/assets/Filecfg");
+    let prod_asset_dir = env::var("GEAR_ASSET_DIR_PROD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("yoshunko_prod/assets/Filecfg"));
     let dump_dir = env::var("ZZZ_DUMP_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("zzz_dump/latest/en"));
@@ -197,7 +226,9 @@ async fn main() {
     let state = AppState {
         db_path,
         state_dir,
+        prod_state_dir,
         asset_dir,
+        prod_asset_dir,
         dump_dir,
         root_dir: root,
     };
@@ -206,6 +237,7 @@ async fn main() {
         .route("/", get(login_page))
         .route("/login", post(login))
         .route("/dashboard", get(dashboard))
+        .route("/switch-server", get(switch_server))
         .route("/avatar/:id", get(avatar_edit).post(avatar_update))
         .route("/weapon/:uid", get(weapon_edit).post(weapon_update))
         .route("/weapon/new", get(weapon_new).post(weapon_add))
@@ -318,16 +350,23 @@ async fn dashboard(
 
     let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
     let delete_mode = query.delete.unwrap_or(0) == 1;
-    let uid = resolve_player_uid(&state, session.uid);
+    let current_mode = active_server_mode(&headers);
+    let active_state = state_with_active_server(&state, &headers);
+    let uid = resolve_player_uid(&active_state, session.uid);
 
-    let avatar_cards = render_avatar_cards(&state, uid);
-    let weapon_cards = render_weapon_cards(&state, uid);
-    let equip_cards = render_equip_cards(&state, uid, delete_mode);
-    let bangboo_cards = render_bangboo_cards(&state, uid);
-    let da_panel = render_da_panel(&state, uid);
-    let shiyu_panel = render_shiyu_panel(&state, uid);
+    let avatar_cards = render_avatar_cards(&active_state, uid);
+    let weapon_cards = render_weapon_cards(&active_state, uid);
+    let equip_cards = render_equip_cards(&active_state, uid, delete_mode);
+    let bangboo_cards = render_bangboo_cards(&active_state, uid);
+    let updates_panel = render_client_updates_panel(&state);
+    let da_panel = render_da_panel(&active_state, uid);
+    let shiyu_panel = render_shiyu_panel(&active_state, uid);
 
     let pending_count = session.pending_writes.len();
+    let next = sanitize_next_path(original_uri.0.path_and_query().map(|pq| pq.as_str()).unwrap_or("/dashboard"))
+        .unwrap_or_else(|| "/dashboard".to_string());
+    let switch_beta_href = format!("/switch-server?target=beta&next={}", url_encode_component(&next));
+    let switch_prod_href = format!("/switch-server?target=prod&next={}", url_encode_component(&next));
 
     let body = format!(
         r#"<!doctype html>
@@ -341,6 +380,7 @@ async fn dashboard(
     header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; background: #151a24; position: sticky; top: 0; }}
     .tabs a {{ margin-right: 12px; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: #c7d1e0; background: #1b2230; }}
     .tabs a.active {{ background: #4c7dff; color: #fff; }}
+    .tabs a.mode {{ background: #2a3140; color: #c7d1e0; }}
     .container {{ padding: 20px 24px 40px; }}
     .cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }}
     .card {{ background: #1b1f2a; padding: 14px; border-radius: 12px; text-decoration: none; color: #e6e6e6; border: 1px solid #232a38; }}
@@ -371,12 +411,17 @@ async fn dashboard(
     <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">Bangboos</a>
     <a class="{tab_da}" href="/dashboard?tab=da">Deadly Assault</a>
     <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">Shiyu</a>
+        <a class="{tab_updates}" href="/dashboard?tab=updates">Client Updates</a>
   </div>
-    <div class="meta">Signed in as {username}</div>
-  <form method="post" action="/apply">
-    <input type="hidden" name="session" value="{session_id}" />
-    <button class="apply" type="submit">Apply changes ({pending_count})</button>
-  </form>
+    <div style="display:flex; align-items:center; gap:10px;">
+        <div class="meta">Signed in as {username}</div>
+        <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
+        <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
+        <form method="post" action="/apply" style="margin:0;">
+            <input type="hidden" name="session" value="{session_id}" />
+            <button class="apply" type="submit">Apply changes ({pending_count})</button>
+        </form>
+    </div>
 </header>
 <div class="container">
   {content}
@@ -389,10 +434,12 @@ async fn dashboard(
         tab_bangboo = if tab == "bangboos" { "active" } else { "" },
         tab_da = if tab == "da" { "active" } else { "" },
         tab_shiyu = if tab == "shiyu" { "active" } else { "" },
+        tab_updates = if tab == "updates" { "active" } else { "" },
         content = match tab.as_str() {
             "weapons" => weapon_cards,
             "discs" => equip_cards,
             "bangboos" => bangboo_cards,
+            "updates" => updates_panel,
             "da" => da_panel,
             "shiyu" => shiyu_panel,
             _ => avatar_cards,
@@ -400,9 +447,86 @@ async fn dashboard(
         session_id = session_id,
         username = session.username,
         pending_count = pending_count,
+        switch_beta_href = switch_beta_href,
+        switch_prod_href = switch_prod_href,
+        beta_active = if current_mode == ServerMode::Beta { "background:#4c7dff;color:#fff;" } else { "background:#2a3140;color:#c7d1e0;" },
+        prod_active = if current_mode == ServerMode::Prod { "background:#4c7dff;color:#fff;" } else { "background:#2a3140;color:#c7d1e0;" },
     );
 
     Html(body).into_response()
+}
+
+async fn switch_server(
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+    Query(query): Query<SwitchServerQuery>,
+) -> impl IntoResponse {
+    let Some((session_id, mut session)) = get_session(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let mode = parse_server_mode(query.target.as_deref().unwrap_or("beta"));
+    let next = query
+        .next
+        .as_deref()
+        .and_then(sanitize_next_path)
+        .unwrap_or_else(|| "/dashboard".to_string());
+
+    // Pending writes are path-bound; clear them on server switch to avoid cross-server apply.
+    session.pending_writes.clear();
+    set_session(session_id, session);
+
+    let mut response = Redirect::to(&next).into_response();
+    let value = match mode {
+        ServerMode::Beta => "gear_server=beta; Path=/; SameSite=Lax",
+        ServerMode::Prod => "gear_server=prod; Path=/; SameSite=Lax",
+    };
+    if let Ok(header_value) = HeaderValue::from_str(value) {
+        response.headers_mut().insert(header::SET_COOKIE, header_value);
+    }
+
+    response
+}
+
+fn parse_server_mode(value: &str) -> ServerMode {
+    if value.eq_ignore_ascii_case("prod") {
+        ServerMode::Prod
+    } else {
+        ServerMode::Beta
+    }
+}
+
+fn cookie_value(headers: &HeaderMap, key: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let cookie = cookie.trim();
+                let (name, value) = cookie.split_once('=')?;
+                if name == key {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn active_server_mode(headers: &HeaderMap) -> ServerMode {
+    let value = cookie_value(headers, "gear_server").unwrap_or_else(|| "beta".to_string());
+    parse_server_mode(&value)
+}
+
+fn state_with_active_server(state: &AppState, headers: &HeaderMap) -> AppState {
+    let mut active = state.clone();
+    if active_server_mode(headers) == ServerMode::Prod {
+        active.state_dir = active.prod_state_dir.clone();
+        if active.prod_asset_dir.exists() {
+            active.asset_dir = active.prod_asset_dir.clone();
+        }
+    }
+    active
 }
 
 async fn avatar_edit(
@@ -415,6 +539,7 @@ async fn avatar_edit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let avatar_path = resolve_item_path(&state.state_dir, uid, "avatar", avatar_id);
 
@@ -528,6 +653,7 @@ async fn avatar_update(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let avatar_path = resolve_item_path(&state.state_dir, uid, "avatar", avatar_id);
 
@@ -592,6 +718,7 @@ async fn weapon_edit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let weapon_path = state
         .state_dir
@@ -677,6 +804,7 @@ async fn weapon_update(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let weapon_path = state
         .state_dir
@@ -760,6 +888,7 @@ async fn weapon_add(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
     let next_uid = read_next_uid(&weapon_dir).unwrap_or(1);
@@ -810,6 +939,7 @@ async fn bangboo_edit(
         return redirect_to_login(&original_uri.0);
         };
 
+    let state = state_with_active_server(&state, &headers);
         let uid = resolve_player_uid(&state, session.uid);
         let bangboo_path = resolve_item_path(&state.state_dir, uid, "buddy", bangboo_uid);
 
@@ -907,6 +1037,7 @@ async fn bangboo_update(
         return redirect_to_login(&original_uri.0);
         };
 
+    let state = state_with_active_server(&state, &headers);
         let uid = resolve_player_uid(&state, session.uid);
         let bangboo_path = resolve_item_path(&state.state_dir, uid, "buddy", bangboo_uid);
 
@@ -944,6 +1075,7 @@ async fn da_shiyu_update(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let hadal_path = state
         .state_dir
@@ -975,6 +1107,7 @@ async fn equip_edit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_path = state
         .state_dir
@@ -1109,6 +1242,7 @@ async fn equip_update(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_path = state
         .state_dir
@@ -1303,6 +1437,7 @@ async fn equip_add(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let next_uid = read_next_uid(&equip_dir).unwrap_or(1);
@@ -1508,6 +1643,7 @@ async fn equip_generate_submit(
         return (StatusCode::BAD_REQUEST, Html("Slot must be 0..6")).into_response();
     }
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let equip_index = load_equip_template_index(&state.asset_dir);
@@ -1559,6 +1695,7 @@ async fn equip_delete_submit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
     let selected = parse_selected_equip_uids(&raw_form_text);
@@ -2309,6 +2446,146 @@ fn render_bangboo_cards(state: &AppState, uid: u32) -> String {
     }
 
     format!("<div class=\"cards\">{cards}</div>")
+}
+
+fn render_client_updates_panel(state: &AppState) -> String {
+    let beta_patch = find_update_file(&state.root_dir.join("client_updates/Beta/Patch"), "tentacle_patch.zip");
+    let beta_update = find_update_file(&state.root_dir.join("client_updates/Beta/Update"), "tentacle_update.zip");
+    let prod_patch = find_update_file(&state.root_dir.join("client_updates/Prod/Patch"), "tentacle_patch.zip");
+
+    let beta_cards = render_update_group(
+        "Beta",
+        &[("Patch", beta_patch), ("Update", beta_update)],
+        true,
+    );
+    let prod_cards = render_update_group(
+        "Prod",
+        &[("Patch", prod_patch)],
+        false,
+    );
+
+    format!(
+        r#"<div style="display:grid; gap:16px;">
+            {beta_cards}
+            {prod_cards}
+        </div>"#
+    )
+}
+
+fn render_update_group(title: &str, items: &[(&str, Option<UpdateFileInfo>)], show_note: bool) -> String {
+    let mut inner = String::new();
+    for (label, item) in items {
+        if let Some(file) = item {
+            let updated = file
+                .modified
+                .map(format_system_time)
+                .unwrap_or_else(|| "Unknown".to_string());
+            inner.push_str(&format!(
+                r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38; display: grid; gap: 6px;">
+                    <div style="font-size: 13px; font-weight: 700; color: #e6e6e6;">{label}</div>
+                    <a href="/assets/{path}" download style="display:inline-flex; align-items:center; justify-content:center; padding: 10px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 700;">
+                        Download {name} {size}
+                    </a>
+                    <div class="meta">Updated: {updated}</div>
+                </div>"#,
+                label = label,
+                path = file.relative_path,
+                name = file.file_name,
+                size = format_file_size(file.size_bytes),
+                updated = updated,
+            ));
+        } else {
+            inner.push_str(&format!(
+                r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38;">
+                    <div style="font-size: 13px; font-weight: 700; color: #e6e6e6; margin-bottom: 6px;">{label}</div>
+                    <div class="meta">No file available yet.</div>
+                </div>"#,
+                label = label,
+            ));
+        }
+    }
+
+    let note = if show_note {
+        "<div class=\"meta\" style=\"margin-top: 8px;\">Beta includes Patch and Update. Prod includes Patch only.</div>"
+    } else {
+        "<div class=\"meta\" style=\"margin-top: 8px;\">Prod distribution currently ships Patch only.</div>"
+    };
+
+    format!(
+        r#"<div class="card" style="background: #1b1f2a; padding: 16px; border-radius: 12px; border: 1px solid #232a38;">
+            <h3 style="margin-top: 0;">{title}</h3>
+            <div style="display:grid; gap:12px;">{inner}</div>
+            {note}
+        </div>"#,
+        title = title,
+        inner = inner,
+        note = note,
+    )
+}
+
+fn find_update_file(dir: &FsPath, preferred_name: &str) -> Option<UpdateFileInfo> {
+    let preferred_path = dir.join(preferred_name);
+    if let Ok(metadata) = fs::metadata(&preferred_path) {
+        return Some(UpdateFileInfo {
+            file_name: preferred_name.to_string(),
+            relative_path: path_to_asset_relative(&preferred_path)?,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+        });
+    }
+
+    let mut latest: Option<(PathBuf, fs::Metadata)> = None;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return None;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let modified = metadata.modified().ok();
+        let is_newer = match (&latest, modified) {
+            (None, _) => true,
+            (Some((_, existing)), Some(candidate)) => candidate > existing.modified().ok().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            _ => false,
+        };
+        if is_newer {
+            latest = Some((path, metadata));
+        }
+    }
+
+    latest.and_then(|(path, metadata)| Some(UpdateFileInfo {
+        file_name: path.file_name()?.to_string_lossy().to_string(),
+        relative_path: path_to_asset_relative(&path)?,
+        size_bytes: metadata.len(),
+        modified: metadata.modified().ok(),
+    }))
+}
+
+fn path_to_asset_relative(path: &FsPath) -> Option<String> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    path.strip_prefix(&root).ok().map(|p| p.to_string_lossy().replace('\\', "/"))
+}
+
+fn format_file_size(bytes: u64) -> String {
+    let bytes_f = bytes as f64;
+    let gib = 1024.0 * 1024.0 * 1024.0;
+    let mib = 1024.0 * 1024.0;
+    if bytes_f >= gib {
+        format!("{:.2} GB", bytes_f / gib)
+    } else {
+        format!("{:.2} MB", bytes_f / mib)
+    }
+}
+
+fn format_system_time(time: std::time::SystemTime) -> String {
+    use chrono::{DateTime, Utc};
+    let datetime: DateTime<Utc> = time.into();
+    datetime.format("%Y-%m-%d %H:%M UTC").to_string()
 }
 
 fn render_da_panel(state: &AppState, uid: u32) -> String {
@@ -3063,6 +3340,14 @@ async fn shiyu_select(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
+    if !is_zone_available_for_prefix(&state.asset_dir, id, "62") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("This Shiyu zone is not available for selected server"),
+        )
+            .into_response();
+    }
     let uid = resolve_player_uid(&state, session.uid);
     let hadal_file = state.state_dir.join(format!("player/{uid}/hadal_zone/info"));
 
@@ -3101,6 +3386,14 @@ async fn da_select(
         return redirect_to_login(&original_uri.0);
     };
 
+    let state = state_with_active_server(&state, &headers);
+    if !is_zone_available_for_prefix(&state.asset_dir, id, "69") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("This Deadly Assault zone is not available for selected server"),
+        )
+            .into_response();
+    }
     let uid = resolve_player_uid(&state, session.uid);
 
     // Read the hadal_zone/info file
@@ -3164,6 +3457,40 @@ async fn da_select(
     }
 
     Redirect::to("/dashboard?tab=da").into_response()
+}
+
+fn is_zone_available_for_prefix(asset_dir: &FsPath, zone_id: u32, prefix: &str) -> bool {
+    let zone_info_path = asset_dir.join("ZoneInfoTemplateTb.json");
+    let Ok(zone_content) = fs::read_to_string(zone_info_path) else {
+        return false;
+    };
+    let Ok(zone_data) = serde_json::from_str::<JsonValue>(&zone_content) else {
+        return false;
+    };
+    let Some(data_array) = zone_data.get("data").and_then(|d| d.as_array()) else {
+        return false;
+    };
+
+    for entry in data_array {
+        let Some(value) = entry.get("zone_id").and_then(|z| z.as_u64()) else {
+            continue;
+        };
+        let value = value as u32;
+        let id_str = value.to_string();
+        if !id_str.starts_with(prefix) {
+            continue;
+        }
+
+        // Allow exact match and 6-digit hotfix variants mapping to 5-digit base.
+        if value == zone_id {
+            return true;
+        }
+        if zone_id >= 100000 && zone_id / 10 == value {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn render_add_weapon_panel(state: &AppState) -> String {
@@ -3296,20 +3623,35 @@ async fn asset_handler(
     }
 
     let full_path = state.root_dir.join(rel_path);
-    let Ok(bytes) = fs::read(&full_path) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let file = match File::open(&full_path).await {
+        Ok(file) => file,
+        Err(err) => {
+            return if err.kind() == std::io::ErrorKind::NotFound {
+                StatusCode::NOT_FOUND.into_response()
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            };
+        }
     };
 
+    let file_len = file.metadata().await.ok().map(|m| m.len());
+    let stream = ReaderStream::new(file);
+
     let content_type = content_type_for_path(&full_path);
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .body(Body::from(bytes))
-        .unwrap()
+        .header(header::CONTENT_TYPE, content_type);
+
+    if let Some(len) = file_len {
+        builder = builder.header(header::CONTENT_LENGTH, len.to_string());
+    }
+
+    builder.body(Body::from_stream(stream)).unwrap()
 }
 
 fn content_type_for_path(path: &FsPath) -> &'static str {
     match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
+        "zip" => "application/zip",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
@@ -3578,11 +3920,7 @@ fn new_session_id() -> String {
 }
 
 fn get_session(headers: &HeaderMap) -> Option<(String, Session)> {
-    let session_id = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| cookies.split(';').find_map(|c| c.trim().strip_prefix("ge_session=")))?
-        .to_string();
+    let session_id = cookie_value(headers, "ge_session")?;
 
     let store = SESSION_STORE.get_or_init(|| Mutex::new(HashMap::new()));
     store
