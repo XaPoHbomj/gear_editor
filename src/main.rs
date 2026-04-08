@@ -16,12 +16,13 @@ use std::{
     collections::HashMap,
     env,
     fs,
+    hash::{Hash, Hasher},
     path::{Path as FsPath, PathBuf},
     sync::{Mutex, OnceLock},
 };
 
 static SESSION_STORE: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
-static HAKUSHIN_DATA: OnceLock<HakushinData> = OnceLock::new();
+static HAKUSHIN_DATA: OnceLock<Mutex<Option<(u64, HakushinData)>>> = OnceLock::new();
 static EQUIP_TEMPLATE: OnceLock<EquipTemplateIndex> = OnceLock::new();
 static STAT_NAMES: OnceLock<HashMap<u32, String>> = OnceLock::new();
 
@@ -34,7 +35,7 @@ struct AppState {
     root_dir: PathBuf,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct HakushinData {
     avatars: HashMap<u32, HakushinEntry>,
     weapons: HashMap<u32, HakushinEntry>,
@@ -163,7 +164,7 @@ struct AddEquipForm {
 #[derive(Deserialize)]
 struct GenerateEquipForm {
     equip_set_id: u32,
-    slot: Option<u32>,
+    slot: Option<String>,
     count: u32,
 }
 
@@ -1498,7 +1499,11 @@ async fn equip_generate_submit(
         )
             .into_response();
     }
-    let selected_slot = payload.slot.unwrap_or(0);
+    let selected_slot = payload
+        .slot
+        .as_deref()
+        .map(parse_slot_value)
+        .unwrap_or(0);
     if selected_slot > 6 {
         return (StatusCode::BAD_REQUEST, Html("Slot must be 0..6")).into_response();
     }
@@ -1828,6 +1833,79 @@ fn clean_rich_text(text: &str) -> String {
         .trim_start_matches('.')
         .trim()
         .to_string()
+}
+
+fn html_escape_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn render_rich_text(text: &str) -> String {
+    let mut source = text.trim().trim_start_matches('.').trim().to_string();
+
+    // Drop icon placeholders that have no renderer in this UI.
+    while let Some(start) = source.find("<IconMap:") {
+        if let Some(end_rel) = source[start..].find('>') {
+            let end = start + end_rel + 1;
+            source.replace_range(start..end, "");
+        } else {
+            break;
+        }
+    }
+
+    let bytes = source.as_bytes();
+    let mut out = String::new();
+    let mut idx = 0usize;
+    let mut open_spans = 0usize;
+
+    while idx < bytes.len() {
+        if source[idx..].starts_with("<color=#") {
+            let tag_start = idx + "<color=#".len();
+            if let Some(end_rel) = source[tag_start..].find('>') {
+                let color = &source[tag_start..tag_start + end_rel];
+                let valid = color.len() == 6 && color.chars().all(|c| c.is_ascii_hexdigit());
+                if valid {
+                    out.push_str(&format!("<span style=\"color: #{};\">", color));
+                    open_spans += 1;
+                    idx = tag_start + end_rel + 1;
+                    continue;
+                }
+            }
+        }
+
+        if source[idx..].starts_with("</color>") {
+            if open_spans > 0 {
+                out.push_str("</span>");
+                open_spans -= 1;
+            }
+            idx += "</color>".len();
+            continue;
+        }
+
+        if let Some(ch) = source[idx..].chars().next() {
+            if ch == '\n' {
+                out.push_str("<br>");
+            } else {
+                out.push_str(&html_escape_text(&ch.to_string()));
+            }
+            idx += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    for _ in 0..open_spans {
+        out.push_str("</span>");
+    }
+
+    out
+}
+
+fn da_total_hp_from_base(base_hp: f64) -> i64 {
+    // Observed from DA data: total HP is a stable 8.74x of base HP.
+    (base_hp * 8.74).round() as i64
 }
 
 fn shiyu_max_stage(shiyu_data: &JsonValue) -> u32 {
@@ -2503,6 +2581,38 @@ async fn da_detail(
                             .get("layer_room")
                             .and_then(|r| r.as_object())
                             .unwrap_or(&empty_map);
+
+                        let layer_buffs = zone
+                            .get("layer_buff")
+                            .and_then(|b| b.as_object())
+                            .unwrap_or(&empty_map);
+
+                        let mut layer_buffs_html = String::new();
+                        for buff in layer_buffs.values() {
+                            let buff_desc = buff
+                                .get("desc")
+                                .and_then(|d| d.as_str())
+                                .unwrap_or("");
+                            if clean_rich_text(buff_desc).is_empty() {
+                                continue;
+                            }
+                            layer_buffs_html.push_str(&format!(
+                                r#"<div style="padding: 8px 10px; border-radius: 8px; background: #10141d; margin-top: 8px; border-left: 3px solid #4c7dff; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</div>"#,
+                                render_rich_text(buff_desc)
+                            ));
+                        }
+
+                        let layer_buffs_section = if layer_buffs_html.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                r#"<div style="margin-top: 10px;">
+                                    <div style="font-size: 12px; font-weight: 700; color: #8fb0ff; margin-bottom: 2px;">Layer Buffs</div>
+                                    {}
+                                </div>"#,
+                                layer_buffs_html
+                            )
+                        };
                         
                         for room in layer_room.values() {
                             let monster_list = room
@@ -2536,7 +2646,9 @@ async fn da_detail(
                                 let element = monster.get("element").and_then(|e| e.as_object()).unwrap_or(&empty_map);
                                 let _weakness = room.get("monster_weakness").and_then(|w| w.as_object()).unwrap_or(&empty_map);
                                 
-                                let hp = format_stat_value(stats.get("hp").and_then(|h| h.as_f64()));
+                                let base_hp_value = stats.get("hp").and_then(|h| h.as_f64()).unwrap_or(0.0);
+                                let hp = format_with_commas(da_total_hp_from_base(base_hp_value));
+                                let base_hp = format_with_commas(base_hp_value.round() as i64);
                                 let atk = format_stat_value(stats.get("attack").and_then(|a| a.as_f64()));
                                 let def = format_stat_value(stats.get("defence").and_then(|d| d.as_f64()));
                                 let stun = format_stat_value(stats.get("stun").and_then(|st| st.as_f64()));
@@ -2590,11 +2702,13 @@ async fn da_detail(
                                             <h3>{boss_name}</h3>
                                             <div style="margin-top: 12px; font-size: 13px; color: #c7d1e0; line-height: 1.45;">
                                                 <div style="margin-bottom: 6px;"><strong>HP:</strong> {hp}</div>
+                                                <div style="margin-bottom: 6px;"><strong>Base HP:</strong> {base_hp}</div>
                                                 <div style="margin-bottom: 6px;"><strong>ATK:</strong> {atk}</div>
                                                 <div style="margin-bottom: 6px;"><strong>DEF:</strong> {def}</div>
                                                 <div style="margin-bottom: 6px;"><strong>Stun:</strong> {stun}</div>
                                                 {weakness_html}
                                                 {resistance_html}
+                                                {layer_buffs_section}
                                             </div>
                                         </div>
                                         {image_html}
@@ -2608,7 +2722,8 @@ async fn da_detail(
                                         format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>Resistance:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", resistance)
                                     } else {
                                         String::new()
-                                    }
+                                    },
+                                    layer_buffs_section = layer_buffs_section
                                 ));
                             }
                         }
@@ -2629,6 +2744,7 @@ async fn da_detail(
                                 
                                 // Remove color tags from description for better readability
                                 let clean_desc = clean_rich_text(buff_desc);
+                                let rich_desc = render_rich_text(buff_desc);
                                 if buff_title.trim().is_empty() && clean_desc.is_empty() {
                                     continue;
                                 }
@@ -2643,7 +2759,7 @@ async fn da_detail(
                                         <h4 style="margin: 0 0 6px 0; color: #4c7dff;">{}</h4>
                                         <p style="margin: 0; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</p>
                                     </div>"#,
-                                    display_title, clean_desc
+                                    display_title, rich_desc
                                 ));
                             }
 
@@ -2673,7 +2789,7 @@ async fn da_detail(
     .back {{ padding: 8px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 600; }}
     .container {{ padding: 20px 24px 40px; }}
     h1 {{ margin: 0 0 20px 0; font-size: 28px; }}
-    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }}
+    .cards {{ display: grid; grid-template-columns: 1fr; gap: 16px; }}
     .card {{ background: #1b1f2a; padding: 16px; border-radius: 12px; border: 1px solid #232a38; }}
     .card h3 {{ margin: 0 0 12px 0; font-size: 18px; }}
     .meta {{ color: #9aa4b2; font-size: 12px; }}
@@ -2682,6 +2798,11 @@ async fn da_detail(
 <body>
 <header>
   <a href="/dashboard?tab=da" class="back">← Back to DA</a>
+    <form method="post" action="/da/{}/select" style="margin: 0;">
+        <button type="submit" style="padding: 10px 18px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
+            Select this Deadly Assault
+        </button>
+    </form>
 </header>
 <div class="container">
   <h1>{} #{}</h1>
@@ -2689,15 +2810,10 @@ async fn da_detail(
     {}
     {}
   </div>
-  <form method="post" action="/da/{}/select" style="margin-top: 20px;">
-    <button type="submit" style="padding: 12px 24px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
-      Select this Deadly Assault
-    </button>
-  </form>
 </div>
 </body>
 </html>"#,
-                    da_name, da_name, id, buff_cards, boss_cards, id
+                                        da_name, id, da_name, id, buff_cards, boss_cards
                 );
                 
                 return Html(html).into_response();
@@ -2752,7 +2868,8 @@ async fn shiyu_detail(
                     .or_else(|| floor_zones.first().map(|(_, zone)| zone.clone()));
 
                 let mut buff_cards = String::new();
-                if let Some(zone) = buff_zone {
+                if !(is_new_style && selected_floor == 5) {
+                    if let Some(zone) = buff_zone {
                     let selectable_buffs = zone
                         .get("layer_buff")
                         .and_then(|b| b.as_object())
@@ -2769,6 +2886,7 @@ async fn shiyu_detail(
                             .and_then(|d| d.as_str())
                             .unwrap_or("No description");
                         let clean_desc = clean_rich_text(buff_desc);
+                        let rich_desc = render_rich_text(buff_desc);
                         if buff_title.trim().is_empty() && clean_desc.is_empty() {
                             continue;
                         }
@@ -2783,7 +2901,7 @@ async fn shiyu_detail(
                                 <h4 style="margin: 0 0 6px 0; color: #4c7dff;">{}</h4>
                                 <p style="margin: 0; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</p>
                             </div>"#,
-                            display_title, clean_desc
+                            display_title, rich_desc
                         ));
                     }
 
@@ -2795,6 +2913,7 @@ async fn shiyu_detail(
                             </div>"#,
                             buffs_html
                         );
+                    }
                     }
                 }
 
@@ -2854,6 +2973,7 @@ async fn shiyu_detail(
                             let buff_title = buff.get("title").and_then(|v| v.as_str()).unwrap_or("Buff");
                             let buff_desc = buff.get("desc").and_then(|v| v.as_str()).unwrap_or("");
                             let clean_desc = clean_rich_text(buff_desc);
+                            let rich_desc = render_rich_text(buff_desc);
                             if buff_title.trim().is_empty() && clean_desc.is_empty() {
                                 continue;
                             }
@@ -2867,7 +2987,7 @@ async fn shiyu_detail(
                                     <strong style="color: #4c7dff;">{}</strong>
                                     <div style="font-size: 12px; color: #9aa4b2; line-height: 1.4; margin-top: 4px;">{}</div>
                                 </div>"#,
-                                display_title, clean_desc
+                                display_title, rich_desc
                             ));
                         }
                         html
@@ -2906,6 +3026,11 @@ async fn shiyu_detail(
 <body>
 <header>
   <a href="/dashboard?tab=shiyu" class="back">← Back to Shiyu</a>
+    <form method="post" action="/shiyu/{}/select" style="margin: 0;">
+        <button type="submit" style="padding: 10px 18px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
+            Select this Shiyu
+        </button>
+    </form>
 </header>
 <div class="container">
   <h1>{} #{}</h1>
@@ -2914,15 +3039,10 @@ async fn shiyu_detail(
         {}
         {}
   </div>
-  <form method="post" action="/shiyu/{}/select" style="margin-top: 20px;">
-    <button type="submit" style="padding: 12px 24px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
-      Select this Shiyu
-    </button>
-  </form>
 </div>
 </body>
 </html>"#,
-                                        shiyu_name, shiyu_name, id, tab_html, buff_cards, fight_cards, id
+                                                                                shiyu_name, id, shiyu_name, id, tab_html, buff_cards, fight_cards
                 );
                 
                 return Html(html).into_response();
@@ -3221,8 +3341,18 @@ fn to_asset_url(path: &str) -> String {
     format!("/assets/{}", path.trim_start_matches('/'))
 }
 
-fn load_hakushin_data(state: &AppState) -> &'static HakushinData {
-    HAKUSHIN_DATA.get_or_init(|| HakushinData {
+fn load_hakushin_data(state: &AppState) -> HakushinData {
+    let fingerprint = hakushin_data_fingerprint(&state.dump_dir);
+    let cache = HAKUSHIN_DATA.get_or_init(|| Mutex::new(None));
+    let mut guard = cache.lock().unwrap();
+
+    if let Some((cached_fingerprint, cached_data)) = guard.as_ref() {
+        if *cached_fingerprint == fingerprint {
+            return cached_data.clone();
+        }
+    }
+
+    let data = HakushinData {
         avatars: load_hakushin_list(
             &state.root_dir,
             &state.dump_dir.join("characters.json"),
@@ -3254,7 +3384,28 @@ fn load_hakushin_data(state: &AppState) -> &'static HakushinData {
             "name",
             &["icon_local", "icon"],
         ),
-    })
+    };
+
+    *guard = Some((fingerprint, data.clone()));
+    data
+}
+
+fn hakushin_data_fingerprint(dump_dir: &FsPath) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for file_name in ["characters.json", "weapons.json", "drive_discs.json", "bangboos.json"] {
+        let path = dump_dir.join(file_name);
+        path.to_string_lossy().hash(&mut hasher);
+        if let Ok(metadata) = fs::metadata(&path) {
+            metadata.len().hash(&mut hasher);
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    duration.as_secs().hash(&mut hasher);
+                    duration.subsec_nanos().hash(&mut hasher);
+                }
+            }
+        }
+    }
+    hasher.finish()
 }
 
 fn load_hakushin_list(
