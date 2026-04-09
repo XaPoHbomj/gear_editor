@@ -21,6 +21,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio_util::io::ReaderStream;
 
 static SESSION_STORE: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
@@ -358,7 +359,11 @@ async fn dashboard(
     let weapon_cards = render_weapon_cards(&active_state, uid);
     let equip_cards = render_equip_cards(&active_state, uid, delete_mode);
     let bangboo_cards = render_bangboo_cards(&active_state, uid);
-    let updates_panel = render_client_updates_panel(&state);
+    let server_host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost:18080");
+    let updates_panel = render_client_updates_panel(&state, server_host);
     let da_panel = render_da_panel(&active_state, uid);
     let shiyu_panel = render_shiyu_panel(&active_state, uid);
 
@@ -2448,7 +2453,7 @@ fn render_bangboo_cards(state: &AppState, uid: u32) -> String {
     format!("<div class=\"cards\">{cards}</div>")
 }
 
-fn render_client_updates_panel(state: &AppState) -> String {
+fn render_client_updates_panel(state: &AppState, server_host: &str) -> String {
     let beta_patch = find_update_file(&state.root_dir.join("client_updates/Beta/Patch"), "tentacle_patch.zip");
     let beta_update = find_update_file(&state.root_dir.join("client_updates/Beta/Update"), "tentacle_update.zip");
     let prod_patch = find_update_file(&state.root_dir.join("client_updates/Prod/Patch"), "tentacle_patch.zip");
@@ -2457,11 +2462,13 @@ fn render_client_updates_panel(state: &AppState) -> String {
         "Beta",
         &[("Patch", beta_patch), ("Update", beta_update)],
         true,
+        server_host,
     );
     let prod_cards = render_update_group(
         "Prod",
         &[("Patch", prod_patch)],
         false,
+        server_host,
     );
 
     format!(
@@ -2472,7 +2479,7 @@ fn render_client_updates_panel(state: &AppState) -> String {
     )
 }
 
-fn render_update_group(title: &str, items: &[(&str, Option<UpdateFileInfo>)], show_note: bool) -> String {
+fn render_update_group(title: &str, items: &[(&str, Option<UpdateFileInfo>)], show_note: bool, server_host: &str) -> String {
     let mut inner = String::new();
     for (label, item) in items {
         if let Some(file) = item {
@@ -2480,20 +2487,37 @@ fn render_update_group(title: &str, items: &[(&str, Option<UpdateFileInfo>)], sh
                 .modified
                 .map(format_system_time)
                 .unwrap_or_else(|| "Unknown".to_string());
-            inner.push_str(&format!(
+            let download_url = format!("/assets/{}", file.relative_path);
+            let mut card_html = format!(
                 r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38; display: grid; gap: 6px;">
                     <div style="font-size: 13px; font-weight: 700; color: #e6e6e6;">{label}</div>
-                    <a href="/assets/{path}" download style="display:inline-flex; align-items:center; justify-content:center; padding: 10px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 700;">
+                    <a href="{download_url}" download style="display:inline-flex; align-items:center; justify-content:center; padding: 10px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 700;">
                         Download {name} {size}
                     </a>
-                    <div class="meta">Updated: {updated}</div>
-                </div>"#,
+                    <div class="meta">Updated: {updated}</div>"#,
                 label = label,
-                path = file.relative_path,
+                download_url = download_url,
                 name = file.file_name,
                 size = format_file_size(file.size_bytes),
                 updated = updated,
-            ));
+            );
+            
+            if label == &"Update" {
+                let aria2c_command = format!(
+                    "aria2c -x 16 -s 16 -k 1M -c \"http://{}{}\"",
+                    server_host, download_url
+                );
+                card_html.push_str(&format!(
+                    r#"<div style="padding: 8px; border-radius: 6px; background: #0f1115; border: 1px solid #1f2635; font-size: 12px; color: #9aa4b2; line-height: 1.4;">
+                        <div style="margin-bottom: 6px; color: #b8c0cc;">For faster downloads, we recommend using aria2c with parallel connections:</div>
+                        <code style="display: block; background: #0a0d11; padding: 6px; border-radius: 4px; font-family: monospace; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: #6c9cff;">{}</code>
+                    </div>"#,
+                    aria2c_command
+                ));
+            }
+            
+            card_html.push_str("</div>");
+            inner.push_str(&card_html);
         } else {
             inner.push_str(&format!(
                 r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38;">
@@ -3612,6 +3636,7 @@ fn render_bangboo_skill_inputs(skill_levels: &HashMap<String, u32>) -> String {
 
 async fn asset_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(path): Path<String>,
 ) -> impl IntoResponse {
     let rel_path = FsPath::new(&path);
@@ -3634,19 +3659,97 @@ async fn asset_handler(
         }
     };
 
-    let file_len = file.metadata().await.ok().map(|m| m.len());
-    let stream = ReaderStream::new(file);
+    let file_len = match file.metadata().await {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
 
     let content_type = content_type_for_path(&full_path);
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type);
+    let range_header = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
 
-    if let Some(len) = file_len {
-        builder = builder.header(header::CONTENT_LENGTH, len.to_string());
+    if let Some(range_value) = range_header {
+        let Some((start, end)) = parse_http_range(&range_value, file_len) else {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_RANGE, format!("bytes */{file_len}"))
+                .body(Body::empty())
+                .unwrap();
+        };
+
+        let mut ranged_file = file;
+        if ranged_file.seek(SeekFrom::Start(start)).await.is_err() {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+
+        let chunk_len = end - start + 1;
+        let stream = ReaderStream::new(ranged_file.take(chunk_len));
+
+        return Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{file_len}"))
+            .header(header::CONTENT_LENGTH, chunk_len.to_string())
+            .body(Body::from_stream(stream))
+            .unwrap();
     }
 
+    let stream = ReaderStream::new(file);
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::ACCEPT_RANGES, "bytes");
+
+    builder = builder.header(header::CONTENT_LENGTH, file_len.to_string());
+
     builder.body(Body::from_stream(stream)).unwrap()
+}
+
+fn parse_http_range(value: &str, file_len: u64) -> Option<(u64, u64)> {
+    if file_len == 0 {
+        return None;
+    }
+
+    let bytes_prefix = "bytes=";
+    if !value.starts_with(bytes_prefix) {
+        return None;
+    }
+
+    // We intentionally support only a single byte range.
+    let first_range = value[bytes_prefix.len()..].split(',').next()?.trim();
+    let (start_raw, end_raw) = first_range.split_once('-')?;
+
+    if start_raw.is_empty() {
+        let suffix_len = end_raw.parse::<u64>().ok()?;
+        if suffix_len == 0 {
+            return None;
+        }
+        let start = file_len.saturating_sub(suffix_len);
+        let end = file_len - 1;
+        return Some((start, end));
+    }
+
+    let start = start_raw.parse::<u64>().ok()?;
+    if start >= file_len {
+        return None;
+    }
+
+    let end = if end_raw.is_empty() {
+        file_len - 1
+    } else {
+        let parsed_end = end_raw.parse::<u64>().ok()?;
+        parsed_end.min(file_len - 1)
+    };
+
+    if end < start {
+        return None;
+    }
+
+    Some((start, end))
 }
 
 fn content_type_for_path(path: &FsPath) -> &'static str {
