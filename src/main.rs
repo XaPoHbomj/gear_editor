@@ -280,13 +280,17 @@ async fn login_page(Query(query): Query<LoginQuery>) -> Html<String> {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gear Editor - Login</title>
   <style>
-    body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; height: 100vh; margin: 0; }
-    form { background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 12px; }
+        body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; height: 100vh; margin: 0; }
+        form { background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 12px; }
     h1 { font-size: 18px; margin: 0; }
     .field { display: flex; flex-direction: column; gap: 6px; }
     label { display: block; margin: 0; font-size: 12px; color: #9aa4b2; }
     input { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }
     button { width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }
+        @media (max-width: 768px) {
+            body { display: flex; align-items: center; justify-content: center; height: auto; min-height: 100vh; padding: 16px; box-sizing: border-box; }
+            form { width: 100%; max-width: 420px; margin: 0; box-sizing: border-box; }
+        }
   </style>
 </head>
 <body>
@@ -381,16 +385,22 @@ async fn dashboard(
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gear Editor</title>
   <style>
-    body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-    header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; background: #151a24; position: sticky; top: 0; }}
-    .tabs a {{ margin-right: 12px; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: #c7d1e0; background: #1b2230; }}
+      body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; overflow-x: hidden; }}
+      header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; position: sticky; top: 0; z-index: 20; }}
+        .menu-button {{ display: none; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 10px; background: #2a3140; color: #fff; align-items: center; justify-content: center; cursor: pointer; }}
+        .menu-button span {{ display: block; width: 18px; height: 2px; background: #fff; position: relative; }}
+        .menu-button span::before, .menu-button span::after {{ content: ""; position: absolute; left: 0; width: 18px; height: 2px; background: #fff; }}
+        .menu-button span::before {{ top: -6px; }}
+        .menu-button span::after {{ top: 6px; }}
+        .tabs {{ display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }}
+        .tabs a {{ margin-right: 0; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: #c7d1e0; background: #1b2230; white-space: nowrap; }}
     .tabs a.active {{ background: #4c7dff; color: #fff; }}
     .tabs a.mode {{ background: #2a3140; color: #c7d1e0; }}
-    .container {{ padding: 20px 24px 40px; }}
+        .container {{ padding: 20px 24px 40px; }}
     .cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }}
     .card {{ background: #1b1f2a; padding: 14px; border-radius: 12px; text-decoration: none; color: #e6e6e6; border: 1px solid #232a38; }}
     .card h3 {{ margin: 6px 0 8px; font-size: 16px; }}
-    .thumb {{ width: 100%; height: 120px; object-fit: cover; object-position: top; border-radius: 8px; background: #0f1115; border: 1px solid #2a3140; }}
+    .thumb {{ display: block; width: 100%; height: 120px; object-fit: cover; object-position: top; border-radius: 8px; background: #0f1115; border: 1px solid #2a3140; }}
     .meta {{ color: #9aa4b2; font-size: 12px; }}
         .panel {{ background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
         .panel h3 {{ margin: 0; font-size: 14px; }}
@@ -399,26 +409,50 @@ async fn dashboard(
         .panel label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         .panel input, .panel select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
         .panel button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+        .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+        .row > * {{ min-width: 0; }}
     .apply {{ background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
     .pill {{ display: inline-block; padding: 4px 8px; background: #2a3140; border-radius: 999px; font-size: 12px; color: #9aa4b2; }}
         .danger {{ background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
         .select-card {{ cursor: pointer; }}
         .select-card input[type="checkbox"] {{ width: auto; margin-bottom: 10px; }}
+        .mobile-overlay {{ display: none; }}
+        .mobile-drawer {{ display: none; }}
+    @media (max-width: 768px) {{
+        header {{ padding: 12px 14px; }}
+        .menu-button {{ display: inline-flex; flex: 0 0 auto; }}
+        .desktop-tabs {{ display: none; }}
+        .container {{ padding: 14px; }}
+        .cards {{ grid-template-columns: 1fr; }}
+        .row {{ grid-template-columns: 1fr; }}
+        .panel {{ flex-direction: column; align-items: stretch; }}
+        .panel a, .panel button {{ width: 100%; max-width: 100%; box-sizing: border-box; }}
+        .card {{ padding: 12px; min-width: 0; }}
+        .meta {{ word-break: break-word; }}
+        .mobile-overlay {{ display: none; position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.45); }}
+        .mobile-overlay.open {{ display: block; }}
+        .mobile-drawer {{ display: block; position: fixed; top: 0; left: 0; bottom: 0; width: min(82vw, 320px); background: #151a24; border-right: 1px solid #232a38; padding: 16px; box-sizing: border-box; overflow-y: auto; transform: translateX(-100%); transition: transform 0.2s ease; z-index: 31; }}
+        .mobile-drawer.open {{ transform: translateX(0); }}
+        .mobile-drawer.tabs {{ display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; }}
+        .mobile-drawer.tabs a {{ display: block; width: 100%; box-sizing: border-box; white-space: normal; line-height: 1.25; }}
+    }}
   </style>
 </head>
 <body>
 <header>
-  <div class="tabs">
-    <a class="{tab_avatar}" href="/dashboard?tab=avatars">Characters</a>
-    <a class="{tab_weapon}" href="/dashboard?tab=weapons">Weapons</a>
-    <a class="{tab_equip}" href="/dashboard?tab=discs">Discs</a>
-    <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">Bangboos</a>
-    <a class="{tab_da}" href="/dashboard?tab=da">Deadly Assault</a>
-    <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">Shiyu</a>
+    <button class="menu-button" type="button" aria-label="Open navigation" onclick="document.querySelector('.mobile-overlay').classList.add('open'); document.querySelector('.mobile-drawer').classList.add('open');">
+        <span></span>
+    </button>
+    <div class="desktop-tabs tabs">
+        <a class="{tab_avatar}" href="/dashboard?tab=avatars">Characters</a>
+        <a class="{tab_weapon}" href="/dashboard?tab=weapons">Weapons</a>
+        <a class="{tab_equip}" href="/dashboard?tab=discs">Discs</a>
+        <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">Bangboos</a>
+        <a class="{tab_da}" href="/dashboard?tab=da">Deadly Assault</a>
+        <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">Shiyu</a>
         <a class="{tab_updates}" href="/dashboard?tab=updates">Client Updates</a>
-  </div>
-    <div style="display:flex; align-items:center; gap:10px;">
+    </div>
+    <div class="desktop-actions" style="display:flex; align-items:center; gap:10px;">
         <div class="meta">Signed in as {username}</div>
         <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
         <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
@@ -428,9 +462,21 @@ async fn dashboard(
         </form>
     </div>
 </header>
+<div class="mobile-overlay" onclick="this.classList.remove('open'); document.querySelector('.mobile-drawer').classList.remove('open');"></div>
+<aside class="mobile-drawer tabs" aria-hidden="true">
+    <a class="{tab_avatar}" href="/dashboard?tab=avatars">Characters</a>
+    <a class="{tab_weapon}" href="/dashboard?tab=weapons">Weapons</a>
+    <a class="{tab_equip}" href="/dashboard?tab=discs">Discs</a>
+    <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">Bangboos</a>
+    <a class="{tab_da}" href="/dashboard?tab=da">Deadly Assault</a>
+    <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">Shiyu</a>
+    <a class="{tab_updates}" href="/dashboard?tab=updates">Client Updates</a>
+</aside>
+<main class="content">
 <div class="container">
   {content}
 </div>
+</main>
 </body>
 </html>"#,
         tab_avatar = if tab == "avatars" { "active" } else { "" },
@@ -585,10 +631,11 @@ async fn avatar_edit(
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
     .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input, select {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+        input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
     label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
     button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-    .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+    .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+    .row > * {{ min-width: 0; }}
         .hero {{ display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }}
         .hero img {{ width: 120px; height: 120px; border-radius: 12px; object-fit: cover; object-position: top; border: 1px solid #2a3140; background: #0f1115; }}
         .hero h1 {{ margin: 0; }}
@@ -759,13 +806,19 @@ async fn weapon_edit(
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
     .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+        input {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
     label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
     button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
         .hero {{ display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }}
         .hero img {{ width: 120px; height: 120px; border-radius: 12px; object-fit: cover; border: 1px solid #2a3140; background: #0f1115; }}
         .hero h1 {{ margin: 0; }}
         .meta {{ color: #9aa4b2; font-size: 12px; }}
+        @media (max-width: 768px) {{
+                .container {{ padding: 14px; }}
+                .hero {{ flex-direction: column; align-items: flex-start; }}
+                .hero img {{ width: 100%; max-width: 240px; height: auto; aspect-ratio: 1 / 1; }}
+                button {{ width: 100%; }}
+        }}
   </style>
 </head>
 <body>
@@ -850,10 +903,16 @@ async fn weapon_new(
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input, select {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+        input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
         label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+        .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+        .row > * {{ min-width: 0; }}
+        @media (max-width: 768px) {{
+            .container {{ padding: 14px; }}
+            .row {{ grid-template-columns: 1fr; }}
+            button {{ width: 100%; }}
+        }}
     </style>
 </head>
 <body>
@@ -979,14 +1038,22 @@ async fn bangboo_edit(
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+        input {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
         label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+        .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+        .row > * {{ min-width: 0; }}
         .hero {{ display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }}
         .hero img {{ width: 120px; height: 120px; border-radius: 12px; object-fit: cover; object-position: top; border: 1px solid #2a3140; background: #0f1115; }}
         .hero h1 {{ margin: 0; }}
         .meta {{ color: #9aa4b2; font-size: 12px; }}
+        @media (max-width: 768px) {{
+            .container {{ padding: 14px; }}
+            .hero {{ flex-direction: column; align-items: flex-start; }}
+            .hero img {{ width: 100%; max-width: 240px; height: auto; aspect-ratio: 1 / 1; }}
+            .row {{ grid-template-columns: 1fr; }}
+            button {{ width: 100%; }}
+        }}
     </style>
 </head>
 <body>
@@ -1179,7 +1246,8 @@ async fn equip_edit(
     input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
     label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
     button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-    .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+    .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+    .row > * {{ min-width: 0; }}
         .hero {{ display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }}
         .hero img {{ width: 120px; height: 120px; border-radius: 12px; object-fit: cover; border: 1px solid #2a3140; background: #0f1115; }}
         .hero h1 {{ margin: 0; }}
@@ -1377,10 +1445,16 @@ async fn equip_new(
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input, select {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+        input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
         label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+        .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+        .row > * {{ min-width: 0; }}
+        @media (max-width: 768px) {{
+            .container {{ padding: 14px; }}
+            .row {{ grid-template-columns: 1fr; }}
+            button {{ width: 100%; }}
+        }}
     </style>
 </head>
 <body>
@@ -1583,7 +1657,8 @@ async fn equip_generate(
         input[type="number"], select {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
         label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .row {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+        .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+        .row > * {{ min-width: 0; }}
         .meta {{ color: #9aa4b2; font-size: 12px; }}
     </style>
 </head>
@@ -2130,7 +2205,7 @@ fn shiyu_render_monster_card(monster: &JsonValue, weakness: Option<&serde_json::
         let base = boss_image_base_name(boss_image);
         let local_src = format!("/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{}.webp", base);
         format!(
-            r#"<img src="{}" alt="{}" style="width: 180px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
+            r#"<img src="{}" alt="{}" style="width: min(180px, 42vw); max-width: 100%; height: 120px; object-fit: cover; object-position: top; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
             local_src, boss_name
         )
     } else {
@@ -2936,7 +3011,7 @@ async fn da_detail(
                                     let base = boss_image_base_name(boss_image);
                                     let local_src = format!("/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{}.webp", base);
                                     format!(
-                                        r#"<img src="{}" alt="{}" style="width: 220px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
+                                        r#"<img src="{}" alt="{}" style="width: 100%; max-width: min(220px, 48vw); height: 120px; object-fit: cover; object-position: top; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
                                         local_src, boss_name
                                     )
                                 } else {
@@ -3086,7 +3161,7 @@ async fn da_detail(
   <title>{} - Gear Editor</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-    header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; background: #151a24; }}
+        header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; }}
     .back {{ padding: 8px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 600; }}
     .container {{ padding: 20px 24px 40px; }}
     h1 {{ margin: 0 0 20px 0; font-size: 28px; }}
@@ -3094,6 +3169,20 @@ async fn da_detail(
     .card {{ background: #1b1f2a; padding: 16px; border-radius: 12px; border: 1px solid #232a38; }}
     .card h3 {{ margin: 0 0 12px 0; font-size: 18px; }}
     .meta {{ color: #9aa4b2; font-size: 12px; }}
+        .cards .card img {{ display: block; }}
+        .cards .card img {{ max-width: 100%; height: auto; }}
+        .cards .card > div:first-child {{ min-width: 0; }}
+        @media (max-width: 768px) {{
+            header {{ padding: 12px 14px; flex-direction: column; align-items: stretch; }}
+            header > a, header > form {{ width: 100%; box-sizing: border-box; }}
+            header > a {{ align-self: stretch; text-align: center; }}
+            header > form button {{ width: 100%; box-sizing: border-box; }}
+            .container {{ padding: 14px; }}
+            h1 {{ font-size: 22px; }}
+            .card {{ padding: 12px; }}
+            .cards .card {{ flex-direction: column; align-items: stretch; }}
+            .cards .card img {{ width: min(100%, 320px); max-width: 100%; height: auto; margin: 0 auto; }}
+        }}
   </style>
 </head>
 <body>
@@ -3316,12 +3405,26 @@ async fn shiyu_detail(
   <title>{} - Gear Editor</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-    header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; background: #151a24; }}
+        header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; }}
     .back {{ padding: 8px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 600; }}
     .container {{ padding: 20px 24px 40px; }}
     h1 {{ margin: 0 0 20px 0; font-size: 28px; }}
     .floor-tabs {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px 0; }}
     .section-title {{ margin: 0 0 12px 0; font-size: 18px; }}
+        .cards .card img {{ display: block; }}
+        .cards .card img {{ max-width: 100%; height: auto; }}
+        .cards .card > div:first-child {{ min-width: 0; }}
+        @media (max-width: 768px) {{
+            header {{ padding: 12px 14px; flex-direction: column; align-items: stretch; }}
+            header > a, header > form {{ width: 100%; box-sizing: border-box; }}
+            header > a {{ align-self: stretch; text-align: center; }}
+            header > form button {{ width: 100%; box-sizing: border-box; }}
+            .container {{ padding: 14px; }}
+            h1 {{ font-size: 22px; }}
+            .cards {{ gap: 12px; }}
+            .cards .card {{ flex-direction: column; align-items: stretch; }}
+            .cards .card img {{ width: min(100%, 320px); max-width: 100%; height: auto; margin: 0 auto; }}
+        }}
   </style>
 </head>
 <body>
@@ -3519,7 +3622,7 @@ fn is_zone_available_for_prefix(asset_dir: &FsPath, zone_id: u32, prefix: &str) 
 
 fn render_add_weapon_panel(state: &AppState) -> String {
         let _ = state;
-        "<div class=\"panel\"><h3>Add Weapon</h3><a href=\"/weapon/new\">New weapon</a></div>"
+    "<div class=\"panel\"><h3>Add Weapon</h3><a href=\"/weapon/new\" style=\"display:inline-block; box-sizing:border-box; text-align:center;\">New weapon</a></div>"
                 .to_string()
 }
 
