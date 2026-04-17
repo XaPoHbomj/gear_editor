@@ -400,7 +400,10 @@ async fn dashboard(
     .cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }}
     .card {{ background: #1b1f2a; padding: 14px; border-radius: 12px; text-decoration: none; color: #e6e6e6; border: 1px solid #232a38; }}
     .card h3 {{ margin: 6px 0 8px; font-size: 16px; }}
-    .thumb {{ display: block; width: 100%; height: 120px; object-fit: cover; object-position: top; border-radius: 8px; background: #0f1115; border: 1px solid #2a3140; }}
+    .thumb {{ display: block; width: 100%; height: 160px; object-fit: cover; object-position: top; border-radius: 8px; background: #0f1115; border: 1px solid #2a3140; }}
+    .cards .card .thumb + .pill {{ margin-top: 8px; }}
+    .boss-thumb-shiyu {{ display: block; width: 180px; min-width: 180px; flex: 0 0 180px; align-self: stretch; min-height: 0; background-color: #10141d; background-size: cover; background-repeat: no-repeat; background-position: center bottom; border-radius: 8px; }}
+    .boss-thumb-da {{ display: block; width: 220px; min-width: 220px; flex: 0 0 220px; align-self: stretch; min-height: 0; background-color: #10141d; background-size: cover; background-repeat: no-repeat; background-position: center bottom; border-radius: 8px; }}
     .meta {{ color: #9aa4b2; font-size: 12px; }}
         .panel {{ background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
         .panel h3 {{ margin: 0; font-size: 14px; }}
@@ -2205,7 +2208,7 @@ fn shiyu_render_monster_card(monster: &JsonValue, weakness: Option<&serde_json::
         let base = boss_image_base_name(boss_image);
         let local_src = format!("/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{}.webp", base);
         format!(
-            r#"<img src="{}" alt="{}" style="width: min(180px, 42vw); max-width: 100%; height: 120px; object-fit: cover; object-position: top; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
+            r#"<img class="boss-inline-thumb" src="{}" alt="{}" style="width: 180px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
             local_src, boss_name
         )
     } else {
@@ -2530,18 +2533,26 @@ fn render_bangboo_cards(state: &AppState, uid: u32) -> String {
 
 fn render_client_updates_panel(state: &AppState, server_host: &str) -> String {
     let beta_patch = find_update_file(&state.root_dir.join("client_updates/Beta/Patch"), "tentacle_patch.zip");
-    let beta_update = find_update_file(&state.root_dir.join("client_updates/Beta/Update"), "tentacle_update.zip");
+    let beta_updates = list_update_files(&state.root_dir.join("client_updates/Beta/Update"));
     let prod_patch = find_update_file(&state.root_dir.join("client_updates/Prod/Patch"), "tentacle_patch.zip");
+
+    let beta_items = vec![
+        ("Patch".to_string(), beta_patch.into_iter().collect::<Vec<_>>()),
+        ("Update".to_string(), beta_updates),
+    ];
+    let prod_items = vec![
+        ("Patch".to_string(), prod_patch.into_iter().collect::<Vec<_>>()),
+    ];
 
     let beta_cards = render_update_group(
         "Beta",
-        &[("Patch", beta_patch), ("Update", beta_update)],
+        &beta_items,
         true,
         server_host,
     );
     let prod_cards = render_update_group(
         "Prod",
-        &[("Patch", prod_patch)],
+        &prod_items,
         false,
         server_host,
     );
@@ -2554,53 +2565,56 @@ fn render_client_updates_panel(state: &AppState, server_host: &str) -> String {
     )
 }
 
-fn render_update_group(title: &str, items: &[(&str, Option<UpdateFileInfo>)], show_note: bool, server_host: &str) -> String {
+fn render_update_group(title: &str, items: &[(String, Vec<UpdateFileInfo>)], show_note: bool, server_host: &str) -> String {
     let mut inner = String::new();
-    for (label, item) in items {
-        if let Some(file) = item {
-            let updated = file
-                .modified
-                .map(format_system_time)
-                .unwrap_or_else(|| "Unknown".to_string());
-            let download_url = format!("/assets/{}", file.relative_path);
-            let mut card_html = format!(
-                r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38; display: grid; gap: 6px;">
-                    <div style="font-size: 13px; font-weight: 700; color: #e6e6e6;">{label}</div>
-                    <a href="{download_url}" download style="display:inline-flex; align-items:center; justify-content:center; padding: 10px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 700;">
-                        Download {name} {size}
-                    </a>
-                    <div class="meta">Updated: {updated}</div>"#,
-                label = label,
-                download_url = download_url,
-                name = file.file_name,
-                size = format_file_size(file.size_bytes),
-                updated = updated,
-            );
-            
-            if label == &"Update" {
-                let aria2c_command = format!(
-                    "aria2c -x 16 -s 16 -k 1M -c \"http://{}{}\"",
-                    server_host, download_url
-                );
-                card_html.push_str(&format!(
-                    r#"<div style="padding: 8px; border-radius: 6px; background: #0f1115; border: 1px solid #1f2635; font-size: 12px; color: #9aa4b2; line-height: 1.4;">
-                        <div style="margin-bottom: 6px; color: #b8c0cc;">For faster downloads, we recommend using aria2c with parallel connections:</div>
-                        <code style="display: block; background: #0a0d11; padding: 6px; border-radius: 4px; font-family: monospace; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: #6c9cff;">{}</code>
-                    </div>"#,
-                    aria2c_command
-                ));
-            }
-            
-            card_html.push_str("</div>");
-            inner.push_str(&card_html);
-        } else {
+    for (label, files) in items {
+        if files.is_empty() {
             inner.push_str(&format!(
-                r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38;">
+                r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38; min-width: 0;">
                     <div style="font-size: 13px; font-weight: 700; color: #e6e6e6; margin-bottom: 6px;">{label}</div>
                     <div class="meta">No file available yet.</div>
                 </div>"#,
                 label = label,
             ));
+        } else {
+            for file in files {
+                let updated = file
+                    .modified
+                    .map(format_system_time)
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let download_url = format!("/assets/{}", file.relative_path);
+                let mut card_html = format!(
+                    r#"<div style="padding: 12px; border-radius: 10px; background: #121620; border: 1px solid #232a38; display: grid; gap: 6px; min-width: 0;">
+                        <div style="font-size: 13px; font-weight: 700; color: #e6e6e6;">{label}</div>
+                        <div class="meta" style="overflow-wrap:anywhere; word-break: break-word;">{name}</div>
+                        <a href="{download_url}" download style="display:flex; width:100%; box-sizing:border-box; align-items:center; justify-content:center; text-align:center; white-space:normal; overflow-wrap:anywhere; word-break:break-word; padding: 10px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 700;">
+                            Download {name} {size}
+                        </a>
+                        <div class="meta">Updated: {updated}</div>"#,
+                    label = label,
+                    name = file.file_name,
+                    download_url = download_url,
+                    size = format_file_size(file.size_bytes),
+                    updated = updated,
+                );
+
+                if label == "Update" {
+                    let aria2c_command = format!(
+                        "aria2c -x 16 -s 16 -k 1M -c \"http://{}{}\"",
+                        server_host, download_url
+                    );
+                    card_html.push_str(&format!(
+                        r#"<div style="padding: 8px; border-radius: 6px; background: #0f1115; border: 1px solid #1f2635; font-size: 12px; color: #9aa4b2; line-height: 1.4; min-width: 0;">
+                            <div style="margin-bottom: 6px; color: #b8c0cc;">For faster downloads, we recommend using aria2c with parallel connections:</div>
+                            <code style="display: block; background: #0a0d11; padding: 6px; border-radius: 4px; font-family: monospace; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; overflow-wrap:anywhere; color: #6c9cff;">{}</code>
+                        </div>"#,
+                        aria2c_command
+                    ));
+                }
+
+                card_html.push_str("</div>");
+                inner.push_str(&card_html);
+            }
         }
     }
 
@@ -2613,13 +2627,51 @@ fn render_update_group(title: &str, items: &[(&str, Option<UpdateFileInfo>)], sh
     format!(
         r#"<div class="card" style="background: #1b1f2a; padding: 16px; border-radius: 12px; border: 1px solid #232a38;">
             <h3 style="margin-top: 0;">{title}</h3>
-            <div style="display:grid; gap:12px;">{inner}</div>
+            <div style="display:grid; gap:12px; min-width:0;">{inner}</div>
             {note}
         </div>"#,
         title = title,
         inner = inner,
         note = note,
     )
+}
+
+fn list_update_files(dir: &FsPath) -> Vec<UpdateFileInfo> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Some(relative_path) = path_to_asset_relative(&path) else {
+            continue;
+        };
+
+        files.push(UpdateFileInfo {
+            file_name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown.zip".to_string()),
+            relative_path,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+        });
+    }
+
+    files.sort_by(|a, b| {
+        let a_time = a.modified.unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let b_time = b.modified.unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        b_time.cmp(&a_time)
+    });
+
+    files
 }
 
 fn find_update_file(dir: &FsPath, preferred_name: &str) -> Option<UpdateFileInfo> {
@@ -3011,7 +3063,7 @@ async fn da_detail(
                                     let base = boss_image_base_name(boss_image);
                                     let local_src = format!("/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{}.webp", base);
                                     format!(
-                                        r#"<img src="{}" alt="{}" style="width: 100%; max-width: min(220px, 48vw); height: 120px; object-fit: cover; object-position: top; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
+                                        r#"<img class="boss-inline-thumb" src="{}" alt="{}" style="width: 220px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
                                         local_src, boss_name
                                     )
                                 } else {
@@ -3182,6 +3234,7 @@ async fn da_detail(
             .card {{ padding: 12px; }}
             .cards .card {{ flex-direction: column; align-items: stretch; }}
             .cards .card img {{ width: min(100%, 320px); max-width: 100%; height: auto; margin: 0 auto; }}
+            .cards .card img.boss-inline-thumb {{ width: min(100%, 320px) !important; max-width: 100% !important; height: auto !important; margin: 0 auto; }}
         }}
   </style>
 </head>
@@ -3424,6 +3477,7 @@ async fn shiyu_detail(
             .cards {{ gap: 12px; }}
             .cards .card {{ flex-direction: column; align-items: stretch; }}
             .cards .card img {{ width: min(100%, 320px); max-width: 100%; height: auto; margin: 0 auto; }}
+            .cards .card img.boss-inline-thumb {{ width: min(100%, 320px) !important; max-width: 100% !important; height: auto !important; margin: 0 auto; }}
         }}
   </style>
 </head>
