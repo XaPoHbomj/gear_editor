@@ -965,7 +965,7 @@ async fn weapon_add(
         ("id".to_string(), ZValue::Number(payload.weapon_id as i64)),
         ("level".to_string(), ZValue::Number(60)),
         ("exp".to_string(), ZValue::Number(0)),
-        ("star".to_string(), ZValue::Number(1)),
+        ("star".to_string(), ZValue::Number(5)),
         ("refine_level".to_string(), ZValue::Number(payload.refine_level as i64)),
         ("lock".to_string(), ZValue::Bool(false)),
     ]);
@@ -1408,6 +1408,8 @@ async fn equip_new(
         return redirect_to_login(&original_uri.0);
         };
 
+        let state = state_with_active_server(&state, &headers);
+
         let options = render_disc_select_options(&state, 0);
         let slot_options = render_slot_options(1);
         let main_options = render_stat_select_options(&state, &disk_main_stat_options(1), 0);
@@ -1644,6 +1646,8 @@ async fn equip_generate(
     let Some((_session_id, _session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
+
+    let state = state_with_active_server(&state, &headers);
 
     let options = render_disc_select_options(&state, 0);
     let slot_options = render_generate_slot_options(None);
@@ -3754,9 +3758,12 @@ fn render_weapon_select_options(state: &AppState, selected_id: u32) -> String {
 
 fn render_disc_select_options(state: &AppState, selected_id: u32) -> String {
     let hakushin = load_hakushin_data(state);
+    let equip_index = load_equip_template_index(&state.asset_dir);
+    let known_sets: std::collections::HashSet<u32> = equip_index.by_suit_slot.keys().map(|(set_id, _)| *set_id).collect();
     let mut items: Vec<(u32, String)> = hakushin
         .discs
         .iter()
+        .filter(|(id, _)| known_sets.contains(id))
         .map(|(id, entry)| (*id, entry.name.clone()))
         .collect();
     items.sort_by(|a, b| a.1.cmp(&b.1));
