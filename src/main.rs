@@ -251,7 +251,6 @@ async fn main() {
         .route("/equip/delete", post(equip_delete_submit))
         .route("/equip/delete-all-unlocked", post(equip_delete_all_unlocked))
         .route("/equip/lock-selected", post(equip_lock_selected))
-        .route("/equip/unlock-selected", post(equip_unlock_selected))
         .route("/bangboo/:uid", get(bangboo_edit).post(bangboo_update))
         .route("/da/:id", get(da_detail))
         .route("/da/:id/select", post(da_select))
@@ -426,9 +425,10 @@ async fn dashboard(
     .pill {{ display: inline-block; padding: 4px 8px; background: #2a3140; border-radius: 999px; font-size: 12px; color: #9aa4b2; }}
         .danger {{ background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
         .select-card {{ cursor: pointer; }}
-        .select-card input[type="checkbox"] {{ width: auto; margin-bottom: 10px; }}
+        .select-card input[type="checkbox"] {{ position: absolute; opacity: 0; pointer-events: none; }}
         .select-card.locked {{ opacity: 0.5; cursor: not-allowed; }}
-        .select-card.lock-mode-locked {{ border-color: #22c55e; }}
+        .delete-form .select-card:has(input:checked) {{ border-color: #ef4444; }}
+        .lock-form .select-card:has(input:checked) {{ border-color: #22c55e; }}
         .mobile-overlay {{ display: none; }}
         .mobile-drawer {{ display: none; }}
     @media (max-width: 768px) {{
@@ -1881,24 +1881,14 @@ async fn equip_lock_selected(
     original_uri: OriginalUri,
     RawForm(raw_form): RawForm,
 ) -> impl IntoResponse {
-    equip_set_lock_for_selected(state, headers, original_uri, &raw_form, true)
+    equip_set_lock(state, headers, original_uri, &raw_form)
 }
 
-async fn equip_unlock_selected(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
-    RawForm(raw_form): RawForm,
-) -> impl IntoResponse {
-    equip_set_lock_for_selected(state, headers, original_uri, &raw_form, false)
-}
-
-fn equip_set_lock_for_selected(
+fn equip_set_lock(
     state: AppState,
     headers: HeaderMap,
     original_uri: OriginalUri,
     raw_form: &[u8],
-    lock_value: bool,
 ) -> Response {
     let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
@@ -1907,18 +1897,31 @@ fn equip_set_lock_for_selected(
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let raw_form_text = String::from_utf8_lossy(raw_form).into_owned();
-    let selected = parse_selected_equip_uids(&raw_form_text);
+    let selected: std::collections::HashSet<u32> =
+        parse_selected_equip_uids(&raw_form_text).into_iter().collect();
+    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
 
-    for equip_uid in selected {
-        let primary_path = state
-            .state_dir
-            .join(format!("player/{uid}/equip/{equip_uid}"));
+    if let Ok(entries) = fs::read_dir(&equip_dir) {
+        for entry in entries.flatten() {
+            let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+                continue;
+            };
+            let equip_uid = match file_name
+                .strip_suffix(".zon")
+                .unwrap_or(&file_name)
+                .parse::<u32>()
+            {
+                Ok(value) if value > 0 => value,
+                _ => continue,
+            };
 
-        let equip = read_zon(&primary_path);
-        if let Some(mut equip) = equip {
-            zon_set_bool(&mut equip, "lock", lock_value);
-            let content = format_zon_pretty(&zon_serialize(&equip));
-            let _ = fs::write(&primary_path, content);
+            let should_lock = selected.contains(&equip_uid);
+
+            if let Some(mut equip) = read_zon(&entry.path()) {
+                zon_set_bool(&mut equip, "lock", should_lock);
+                let content = format_zon_pretty(&zon_serialize(&equip));
+                let _ = fs::write(&entry.path(), content);
+            }
         }
     }
 
@@ -2576,7 +2579,7 @@ fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool, lock_mode: 
             } else if lock_mode {
                 if locked {
                     format!(
-                        "<label class=\"card select-card lock-mode-locked\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -2628,12 +2631,12 @@ fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool, lock_mode: 
     if delete_mode {
         let delete_panel = "<div class=\"panel\"><h3>Delete Mode</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">Delete selected discs</button><button class=\"danger\" type=\"submit\" formaction=\"/equip/delete-all-unlocked\" onclick=\"return confirm('Delete ALL unlocked discs?');\">Delete all unlocked</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
         format!(
-            "{add_panel}<form method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('Delete selected discs?');\">{delete_panel}<div class=\"cards\">{cards}</div></form>",
+            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('Delete selected discs?');\">{delete_panel}<div class=\"cards\">{cards}</div></form>",
         )
     } else if lock_mode {
-        let lock_panel = "<div class=\"panel\"><h3>Lock Mode</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button type=\"submit\" formaction=\"/equip/lock-selected\">Lock selected</button><button type=\"submit\" formaction=\"/equip/unlock-selected\">Unlock selected</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
+        let lock_panel = "<div class=\"panel\"><h3>Lock Mode</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button type=\"submit\" formaction=\"/equip/lock-selected\">Lock selected</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
         format!(
-            "{add_panel}<form method=\"post\">{lock_panel}<div class=\"cards\">{cards}</div></form>",
+            "{add_panel}<form class=\"lock-form\" method=\"post\">{lock_panel}<div class=\"cards\">{cards}</div></form>",
         )
     } else {
         format!("{add_panel}<div class=\"cards\">{cards}</div>")
