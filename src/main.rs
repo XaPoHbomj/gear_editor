@@ -685,8 +685,8 @@ async fn avatar_edit(
 </body>
 </html>"#,
         avatar_id = avatar_id,
-        avatar_name = avatar_name,
-        avatar_img = avatar_img,
+        avatar_name = html_escape_attr(&avatar_name),
+        avatar_img = html_escape_attr(&avatar_img),
         level = level,
         unlocked_talent_num = unlocked_talent_num,
         weapon_select = render_weapon_select(cur_weapon_uid, &weapon_options),
@@ -845,8 +845,8 @@ async fn weapon_edit(
 </html>"#,
         weapon_uid = weapon_uid,
         weapon_id = weapon_id,
-        weapon_name = weapon_name,
-        weapon_img = weapon_img,
+        weapon_name = html_escape_attr(&weapon_name),
+        weapon_img = html_escape_attr(&weapon_img),
         level = level,
         refine_level = refine_level,
     );
@@ -1091,8 +1091,8 @@ async fn bangboo_edit(
 </body>
 </html>"#,
                 bangboo_uid = bangboo_uid,
-                bangboo_name = bangboo_name,
-                bangboo_img = bangboo_img,
+                bangboo_name = html_escape_attr(&bangboo_name),
+                bangboo_img = html_escape_attr(&bangboo_img),
                 level = level,
                 rank = rank,
                 skills = render_bangboo_skill_inputs(&skill_levels),
@@ -1294,8 +1294,8 @@ async fn equip_edit(
 </html>"#,
         equip_uid = equip_uid,
         equip_item_id = equip_item_id,
-        equip_name = equip_name,
-        equip_img = equip_img,
+        equip_name = html_escape_attr(&equip_name),
+        equip_img = html_escape_attr(&equip_img),
         slot = slot,
         level = level,
         main_options = render_stat_select_options(&state, &main_options, normalized_main_key),
@@ -1970,9 +1970,9 @@ fn render_avatar_cards(state: &AppState, uid: u32) -> String {
                 cards.push_str(&format!(
                     "<a class=\"card\" href=\"/avatar/{id}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">ID {id}</span><h3>{name}</h3><div class=\"meta\">Level {level}</div></a>",
                     id = avatar_id,
-                    name = name,
+                    name = html_escape_attr(&name),
                     level = level,
-                    img = img
+                    img = html_escape_attr(&img)
                 ));
             }
         }
@@ -2349,9 +2349,9 @@ fn render_weapon_cards(state: &AppState, uid: u32) -> String {
             cards.push_str(&format!(
                 "<a class=\"card\" href=\"/weapon/{uid}\"><img class=\"thumb\" style=\"object-fit: contain;\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Level {level}</div></a>",
                 uid = weapon_uid,
-                name = name,
+                name = html_escape_attr(&name),
                 level = level,
-                img = img
+                img = html_escape_attr(&img)
             ));
         }
     }
@@ -2432,23 +2432,23 @@ fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool) -> String {
                 format!(
                     "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
                     uid = equip_uid,
-                    name = name,
+                    name = html_escape_attr(&name),
                     level = level,
                     slot = slot,
                     main_label = main_label,
                     sub_stats_text = sub_stats_text,
-                    img = img
+                    img = html_escape_attr(&img)
                 )
             } else {
                 format!(
                     "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></a>",
                     uid = equip_uid,
-                    name = name,
+                    name = html_escape_attr(&name),
                     level = level,
                     slot = slot,
                     main_label = main_label,
                     sub_stats_text = sub_stats_text,
-                    img = img
+                    img = html_escape_attr(&img)
                 )
             };
             cards_data.push((equip_item_id, equip_uid, card_html));
@@ -2520,10 +2520,10 @@ fn render_bangboo_cards(state: &AppState, uid: u32) -> String {
             cards.push_str(&format!(
                 "<a class=\"card\" href=\"/bangboo/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Level {level}</div><div class=\"meta\">Rank {rank}</div></a>",
                 uid = bangboo_uid,
-                name = name,
+                name = html_escape_attr(&name),
                 level = level,
                 rank = rank,
-                img = img
+                img = html_escape_attr(&img)
             ));
         }
     }
