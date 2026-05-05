@@ -1,0 +1,290 @@
+use crate::AppState;
+use serde_json::Value as JsonValue;
+use std::{collections::HashMap, fs, sync::OnceLock};
+
+static STAT_NAMES: OnceLock<HashMap<u32, String>> = OnceLock::new();
+
+fn load_stat_names(state: &AppState) -> &'static HashMap<u32, String> {
+    STAT_NAMES.get_or_init(|| {
+        let mut map = HashMap::new();
+
+        let mut weapon_prop = HashMap::new();
+        let weapon_template = state.asset_dir.join("WeaponTemplateTb.json");
+        if let Ok(data) = fs::read_to_string(weapon_template) {
+            if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
+                if let Some(items) = json.get("data").and_then(|v| v.as_array()) {
+                    for item in items {
+                        let Some(item_id) = item.get("item_id").and_then(|v| v.as_u64()) else {
+                            continue;
+                        };
+                        let base_prop = item
+                            .get("base_property")
+                            .and_then(|v| v.get("property"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        let rand_prop = item
+                            .get("rand_property")
+                            .and_then(|v| v.get("property"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        weapon_prop.insert(item_id as u32, (base_prop, rand_prop));
+                    }
+                }
+            }
+        }
+
+        let weapon_details = state.dump_dir.join("weapon_details.json");
+        if let Ok(data) = fs::read_to_string(weapon_details) {
+            if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
+                if let Some(obj) = json.as_object() {
+                    for (key, details) in obj {
+                        let Ok(item_id) = key.parse::<u32>() else {
+                            continue;
+                        };
+                        let Some((base_prop, rand_prop)) = weapon_prop.get(&item_id) else {
+                            continue;
+                        };
+                        if let Some(name) = details
+                            .get("base_property")
+                            .and_then(|v| v.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
+                            if *base_prop > 0 {
+                                map.entry(*base_prop).or_insert_with(|| name.to_string());
+                            }
+                        }
+                        if let Some(name) = details
+                            .get("rand_property")
+                            .and_then(|v| v.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
+                            if *rand_prop > 0 {
+                                map.entry(*rand_prop).or_insert_with(|| name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let bangboo_details = state.dump_dir.join("bangboo_details.json");
+        if let Ok(data) = fs::read_to_string(bangboo_details) {
+            if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
+                if let Some(obj) = json.as_object() {
+                    for (_, details) in obj {
+                        if let Some(ascensions) =
+                            details.get("ascensions").and_then(|v| v.as_object())
+                        {
+                            for (_, stage) in ascensions {
+                                if let Some(extra_props) =
+                                    stage.get("extra_props").and_then(|v| v.as_array())
+                                {
+                                    for prop in extra_props {
+                                        let Some(id) = prop.get("id").and_then(|v| v.as_u64())
+                                        else {
+                                            continue;
+                                        };
+                                        let Some(name) = prop.get("name").and_then(|v| v.as_str())
+                                        else {
+                                            continue;
+                                        };
+                                        map.entry(id as u32).or_insert_with(|| name.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        map
+    })
+}
+
+const STAT_HP: u32 = 11103;
+const STAT_ATK: u32 = 12103;
+const STAT_DEF: u32 = 13103;
+const STAT_HP_PCT: u32 = 11102;
+const STAT_ATK_PCT: u32 = 12102;
+const STAT_DEF_PCT: u32 = 13102;
+const STAT_CRIT_RATE: u32 = 20103;
+const STAT_CRIT_DMG: u32 = 21103;
+const STAT_ANOMALY_PROF: u32 = 31203;
+const STAT_PEN: u32 = 23203;
+const STAT_PEN_RATIO: u32 = 23202;
+const STAT_ANOMALY_MASTERY: u32 = 31402;
+const STAT_IMPACT: u32 = 12202;
+const STAT_ENERGY_REGEN: u32 = 30502;
+const STAT_PHYSICAL_DMG: u32 = 31503;
+const STAT_FIRE_DMG: u32 = 31603;
+const STAT_ICE_DMG: u32 = 31703;
+const STAT_ELECTRIC_DMG: u32 = 31803;
+const STAT_ETHER_DMG: u32 = 31903;
+
+fn disk_stat_label(key: u32) -> Option<&'static str> {
+    match key {
+        STAT_HP => Some("HP"),
+        STAT_ATK => Some("ATK"),
+        STAT_DEF => Some("DEF"),
+        STAT_HP_PCT => Some("HP%"),
+        STAT_ATK_PCT => Some("ATK%"),
+        STAT_DEF_PCT => Some("DEF%"),
+        STAT_CRIT_RATE => Some("CRIT Rate%"),
+        STAT_CRIT_DMG => Some("CRIT DMG%"),
+        STAT_ANOMALY_PROF => Some("Anomaly Proficiency"),
+        STAT_PEN => Some("PEN"),
+        STAT_PEN_RATIO => Some("PEN Ratio%"),
+        STAT_ANOMALY_MASTERY => Some("Anomaly Mastery%"),
+        STAT_IMPACT => Some("Impact%"),
+        STAT_ENERGY_REGEN => Some("Energy Regen%"),
+        STAT_PHYSICAL_DMG => Some("Physical DMG%"),
+        STAT_FIRE_DMG => Some("Fire DMG%"),
+        STAT_ICE_DMG => Some("Ice DMG%"),
+        STAT_ELECTRIC_DMG => Some("Electric DMG%"),
+        STAT_ETHER_DMG => Some("Ether DMG%"),
+        _ => None,
+    }
+}
+
+pub(crate) fn disk_main_stat_options(slot: u32) -> Vec<u32> {
+    match slot {
+        1 => vec![STAT_HP],
+        2 => vec![STAT_ATK],
+        3 => vec![STAT_DEF],
+        4 => vec![
+            STAT_ATK_PCT,
+            STAT_HP_PCT,
+            STAT_DEF_PCT,
+            STAT_CRIT_RATE,
+            STAT_CRIT_DMG,
+            STAT_ANOMALY_PROF,
+        ],
+        5 => vec![
+            STAT_ATK_PCT,
+            STAT_HP_PCT,
+            STAT_DEF_PCT,
+            STAT_PHYSICAL_DMG,
+            STAT_ICE_DMG,
+            STAT_FIRE_DMG,
+            STAT_ELECTRIC_DMG,
+            STAT_ETHER_DMG,
+            STAT_PEN_RATIO,
+        ],
+        6 => vec![
+            STAT_ATK_PCT,
+            STAT_HP_PCT,
+            STAT_DEF_PCT,
+            STAT_ANOMALY_MASTERY,
+            STAT_IMPACT,
+            STAT_ENERGY_REGEN,
+        ],
+        _ => vec![],
+    }
+}
+
+pub(crate) fn normalize_disk_main_stat(slot: u32, key: u32) -> Option<u32> {
+    let options = disk_main_stat_options(slot);
+    if options.contains(&key) {
+        Some(key)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn disk_main_base_value(key: u32) -> Option<u32> {
+    match key {
+        STAT_HP => Some(550),
+        STAT_ATK => Some(79),
+        STAT_DEF => Some(46),
+        STAT_ATK_PCT => Some(750),
+        STAT_HP_PCT => Some(750),
+        STAT_DEF_PCT => Some(1200),
+        STAT_CRIT_RATE => Some(600),
+        STAT_CRIT_DMG => Some(1200),
+        STAT_ANOMALY_PROF => Some(23),
+        STAT_PHYSICAL_DMG | STAT_ICE_DMG | STAT_FIRE_DMG | STAT_ELECTRIC_DMG | STAT_ETHER_DMG => {
+            Some(750)
+        }
+        STAT_PEN_RATIO => Some(600),
+        STAT_ANOMALY_MASTERY => Some(750),
+        STAT_IMPACT => Some(450),
+        STAT_ENERGY_REGEN => Some(1500),
+        _ => None,
+    }
+}
+
+pub(crate) fn disk_sub_base_value(key: u32) -> Option<u32> {
+    match key {
+        STAT_HP => Some(112),
+        STAT_ATK => Some(19),
+        STAT_DEF => Some(15),
+        STAT_HP_PCT => Some(300),
+        STAT_ATK_PCT => Some(300),
+        STAT_DEF_PCT => Some(480),
+        STAT_CRIT_DMG => Some(480),
+        STAT_CRIT_RATE => Some(240),
+        STAT_ANOMALY_PROF => Some(9),
+        STAT_PEN => Some(9),
+        _ => None,
+    }
+}
+
+pub(crate) fn disk_sub_stat_options(main_key: u32) -> Vec<u32> {
+    let mut options = vec![
+        STAT_HP,
+        STAT_ATK,
+        STAT_DEF,
+        STAT_HP_PCT,
+        STAT_ATK_PCT,
+        STAT_DEF_PCT,
+        STAT_CRIT_DMG,
+        STAT_CRIT_RATE,
+        STAT_ANOMALY_PROF,
+        STAT_PEN,
+    ];
+
+    match main_key {
+        STAT_HP => {
+            options.retain(|key| *key != STAT_HP);
+        }
+        STAT_ATK => {
+            options.retain(|key| *key != STAT_ATK);
+        }
+        STAT_DEF => {
+            options.retain(|key| *key != STAT_DEF);
+        }
+        STAT_HP_PCT => {
+            options.retain(|key| *key != STAT_HP_PCT);
+        }
+        STAT_ATK_PCT => {
+            options.retain(|key| *key != STAT_ATK_PCT);
+        }
+        STAT_DEF_PCT => {
+            options.retain(|key| *key != STAT_DEF_PCT);
+        }
+        STAT_CRIT_RATE => {
+            options.retain(|key| *key != STAT_CRIT_RATE);
+        }
+        STAT_CRIT_DMG => {
+            options.retain(|key| *key != STAT_CRIT_DMG);
+        }
+        STAT_ANOMALY_PROF => {
+            options.retain(|key| *key != STAT_ANOMALY_PROF);
+        }
+        _ => {}
+    }
+
+    options
+}
+
+pub(crate) fn stat_label(state: &AppState, key: u32) -> String {
+    if let Some(label) = disk_stat_label(key) {
+        return label.to_string();
+    }
+    let names = load_stat_names(state);
+    names
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| format!("Stat {key}"))
+}
