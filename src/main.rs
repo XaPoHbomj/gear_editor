@@ -100,6 +100,7 @@ struct SdkConfig {
 struct TabQuery {
     tab: Option<String>,
     delete: Option<u8>,
+    lock: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +156,8 @@ struct EquipUpdateForm {
     sub_proc_3: u32,
     sub_key_4: u32,
     sub_proc_4: u32,
+    #[serde(default)]
+    lock: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -246,6 +249,9 @@ async fn main() {
         .route("/equip/new", get(equip_new).post(equip_add))
         .route("/equip/generate", get(equip_generate).post(equip_generate_submit))
         .route("/equip/delete", post(equip_delete_submit))
+        .route("/equip/delete-all-unlocked", post(equip_delete_all_unlocked))
+        .route("/equip/lock-selected", post(equip_lock_selected))
+        .route("/equip/unlock-selected", post(equip_unlock_selected))
         .route("/bangboo/:uid", get(bangboo_edit).post(bangboo_update))
         .route("/da/:id", get(da_detail))
         .route("/da/:id/select", post(da_select))
@@ -355,13 +361,14 @@ async fn dashboard(
 
     let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
     let delete_mode = query.delete.unwrap_or(0) == 1;
+    let lock_mode = query.lock.unwrap_or(0) == 1;
     let current_mode = active_server_mode(&headers);
     let active_state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&active_state, session.uid);
 
     let avatar_cards = render_avatar_cards(&active_state, uid);
     let weapon_cards = render_weapon_cards(&active_state, uid);
-    let equip_cards = render_equip_cards(&active_state, uid, delete_mode);
+    let equip_cards = render_equip_cards(&active_state, uid, delete_mode, lock_mode);
     let bangboo_cards = render_bangboo_cards(&active_state, uid);
     let server_host = headers
         .get(header::HOST)
@@ -407,11 +414,12 @@ async fn dashboard(
     .meta {{ color: #9aa4b2; font-size: 12px; }}
         .panel {{ background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
         .panel h3 {{ margin: 0; font-size: 14px; }}
-        .panel a {{ display: inline-block; padding: 8px 12px; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; text-decoration: none; }}
+        .panel a {{ display: inline-flex; align-items: center; justify-content: center; margin-top: 16px; padding: 10px 14px; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; text-decoration: none; box-sizing: border-box; }}
         .panel form {{ width: 100%; }}
         .panel label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         .panel input, .panel select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
         .panel button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
+        .panel div button, .panel div a {{ margin-top: 0; }}
         .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
         .row > * {{ min-width: 0; }}
     .apply {{ background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
@@ -419,6 +427,8 @@ async fn dashboard(
         .danger {{ background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
         .select-card {{ cursor: pointer; }}
         .select-card input[type="checkbox"] {{ width: auto; margin-bottom: 10px; }}
+        .select-card.locked {{ opacity: 0.5; cursor: not-allowed; }}
+        .select-card.lock-mode-locked {{ border-color: #22c55e; }}
         .mobile-overlay {{ display: none; }}
         .mobile-drawer {{ display: none; }}
     @media (max-width: 768px) {{
@@ -1193,6 +1203,8 @@ async fn equip_edit(
     };
 
     let level = zon_get_number(&equip_zon, "level").unwrap_or(0) as u32;
+    let locked = zon_get_bool(&equip_zon, "lock").unwrap_or(false);
+    let lock_checked = if locked { "checked" } else { "" };
     let equip_item_id = zon_get_number(&equip_zon, "id").unwrap_or(0) as u32;
     let hakushin = load_hakushin_data(&state);
     let equip_index = load_equip_template_index(&state.asset_dir);
@@ -1269,6 +1281,7 @@ async fn equip_edit(
     <form method="post">
       <label>Level</label>
       <input name="level" type="number" min="0" value="{level}" />
+      <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" name="lock" value="1" {lock_checked} style="width:auto;" /> Lock disc (prevent deletion)</label>
 
             <h3>Main stat</h3>
             <div class="row">
@@ -1298,6 +1311,7 @@ async fn equip_edit(
         equip_img = html_escape_attr(&equip_img),
         slot = slot,
         level = level,
+        lock_checked = lock_checked,
         main_options = render_stat_select_options(&state, &main_options, normalized_main_key),
         sub_stat_rows = render_sub_stat_rows(&state, &sub_props, &sub_options, normalized_main_key),
         script = script,
@@ -1332,6 +1346,8 @@ async fn equip_update(
         zon_set_number(&mut equip_zon, "star", 1);
     }
     zon_set_number(&mut equip_zon, "level", payload.level as i64);
+    let locked = payload.lock.unwrap_or(0) == 1;
+    zon_set_bool(&mut equip_zon, "lock", locked);
     let equip_item_id = zon_get_number(&equip_zon, "id").unwrap_or(0) as u32;
     let equip_index = load_equip_template_index(&state.asset_dir);
     let slot = equip_slot(equip_item_id, equip_index);
@@ -1791,6 +1807,16 @@ async fn equip_delete_submit(
         let primary_path = state
             .state_dir
             .join(format!("player/{uid}/equip/{equip_uid}"));
+
+        let equip = read_zon(&primary_path);
+        let locked = equip
+            .as_ref()
+            .and_then(|v| zon_get_bool(v, "lock"))
+            .unwrap_or(false);
+        if locked {
+            continue;
+        }
+
         let zon_path = state
             .state_dir
             .join(format!("player/{uid}/equip/{equip_uid}.zon"));
@@ -1807,6 +1833,95 @@ async fn equip_delete_submit(
     }
 
     set_session(session_id, session);
+    Redirect::to("/dashboard?tab=discs").into_response()
+}
+
+async fn equip_delete_all_unlocked(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+) -> impl IntoResponse {
+    let Some((session_id, mut session)) = get_session_mut(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let state = state_with_active_server(&state, &headers);
+    let uid = resolve_player_uid(&state, session.uid);
+    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
+
+    if let Ok(entries) = fs::read_dir(&equip_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let equip = read_zon(&path);
+            let locked = equip
+                .as_ref()
+                .and_then(|v| zon_get_bool(v, "lock"))
+                .unwrap_or(false);
+            if !locked {
+                if path.exists() {
+                    let _ = fs::remove_file(&path);
+                }
+                let zon_path = path.with_extension("zon");
+                if zon_path.exists() {
+                    let _ = fs::remove_file(&zon_path);
+                }
+                session.pending_writes.remove(&path);
+                session.pending_writes.remove(&zon_path);
+            }
+        }
+    }
+
+    set_session(session_id, session);
+    Redirect::to("/dashboard?tab=discs").into_response()
+}
+
+async fn equip_lock_selected(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+    RawForm(raw_form): RawForm,
+) -> impl IntoResponse {
+    equip_set_lock_for_selected(state, headers, original_uri, &raw_form, true)
+}
+
+async fn equip_unlock_selected(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+    RawForm(raw_form): RawForm,
+) -> impl IntoResponse {
+    equip_set_lock_for_selected(state, headers, original_uri, &raw_form, false)
+}
+
+fn equip_set_lock_for_selected(
+    state: AppState,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+    raw_form: &[u8],
+    lock_value: bool,
+) -> Response {
+    let Some((_session_id, session)) = get_session(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let state = state_with_active_server(&state, &headers);
+    let uid = resolve_player_uid(&state, session.uid);
+    let raw_form_text = String::from_utf8_lossy(raw_form).into_owned();
+    let selected = parse_selected_equip_uids(&raw_form_text);
+
+    for equip_uid in selected {
+        let primary_path = state
+            .state_dir
+            .join(format!("player/{uid}/equip/{equip_uid}"));
+
+        let equip = read_zon(&primary_path);
+        if let Some(mut equip) = equip {
+            zon_set_bool(&mut equip, "lock", lock_value);
+            let content = format_zon_pretty(&zon_serialize(&equip));
+            let _ = fs::write(&primary_path, content);
+        }
+    }
+
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -2364,7 +2479,7 @@ fn render_weapon_cards(state: &AppState, uid: u32) -> String {
     format!("{add_panel}<div class=\"cards\">{cards}</div>")
 }
 
-fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool) -> String {
+fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool, lock_mode: bool) -> String {
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let equip_templates = load_equip_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state);
@@ -2419,6 +2534,12 @@ fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool) -> String {
                 .as_ref()
                 .map(zon_get_sub_properties_list)
                 .unwrap_or_default();
+            let locked = equip
+                .as_ref()
+                .and_then(|v| zon_get_bool(v, "lock"))
+                .unwrap_or(false);
+            let lock_icon = if locked { " \u{1f512}" } else { "" };
+
             let sub_stats_text = if sub_stats.is_empty() {
                 "None".to_string()
             } else {
@@ -2429,26 +2550,64 @@ fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool) -> String {
                     .join(", ")
             };
             let card_html = if delete_mode {
-                format!(
-                    "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
-                    uid = equip_uid,
-                    name = html_escape_attr(&name),
-                    level = level,
-                    slot = slot,
-                    main_label = main_label,
-                    sub_stats_text = sub_stats_text,
-                    img = html_escape_attr(&img)
-                )
+                if locked {
+                    format!(
+                        "<label class=\"card select-card locked\"><input type=\"checkbox\" disabled /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        uid = equip_uid,
+                        name = html_escape_attr(&name),
+                        level = level,
+                        slot = slot,
+                        main_label = main_label,
+                        sub_stats_text = sub_stats_text,
+                        img = html_escape_attr(&img)
+                    )
+                } else {
+                    format!(
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        uid = equip_uid,
+                        name = html_escape_attr(&name),
+                        level = level,
+                        slot = slot,
+                        main_label = main_label,
+                        sub_stats_text = sub_stats_text,
+                        img = html_escape_attr(&img)
+                    )
+                }
+            } else if lock_mode {
+                if locked {
+                    format!(
+                        "<label class=\"card select-card lock-mode-locked\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        uid = equip_uid,
+                        name = html_escape_attr(&name),
+                        level = level,
+                        slot = slot,
+                        main_label = main_label,
+                        sub_stats_text = sub_stats_text,
+                        img = html_escape_attr(&img)
+                    )
+                } else {
+                    format!(
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        uid = equip_uid,
+                        name = html_escape_attr(&name),
+                        level = level,
+                        slot = slot,
+                        main_label = main_label,
+                        sub_stats_text = sub_stats_text,
+                        img = html_escape_attr(&img)
+                    )
+                }
             } else {
                 format!(
-                    "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></a>",
+                    "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}{lock_icon}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></a>",
                     uid = equip_uid,
                     name = html_escape_attr(&name),
                     level = level,
                     slot = slot,
                     main_label = main_label,
                     sub_stats_text = sub_stats_text,
-                    img = html_escape_attr(&img)
+                    img = html_escape_attr(&img),
+                    lock_icon = lock_icon
                 )
             };
             cards_data.push((equip_item_id, equip_uid, card_html));
@@ -2465,11 +2624,16 @@ fn render_equip_cards(state: &AppState, uid: u32, delete_mode: bool) -> String {
         cards.push_str("<p class=\"meta\">No discs found for this account.</p>");
     }
 
-    let add_panel = render_add_equip_panel(state, delete_mode);
+    let add_panel = render_add_equip_panel(state, delete_mode, lock_mode);
     if delete_mode {
-        let delete_panel = "<div class=\"panel\"><h3>Delete Mode</h3><div style=\"display:flex; gap:8px;\"><button class=\"danger\" type=\"submit\">Delete selected discs</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
+        let delete_panel = "<div class=\"panel\"><h3>Delete Mode</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">Delete selected discs</button><button class=\"danger\" type=\"submit\" formaction=\"/equip/delete-all-unlocked\" onclick=\"return confirm('Delete ALL unlocked discs?');\">Delete all unlocked</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
         format!(
             "{add_panel}<form method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('Delete selected discs?');\">{delete_panel}<div class=\"cards\">{cards}</div></form>",
+        )
+    } else if lock_mode {
+        let lock_panel = "<div class=\"panel\"><h3>Lock Mode</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button type=\"submit\" formaction=\"/equip/lock-selected\">Lock selected</button><button type=\"submit\" formaction=\"/equip/unlock-selected\">Unlock selected</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
+        format!(
+            "{add_panel}<form method=\"post\">{lock_panel}<div class=\"cards\">{cards}</div></form>",
         )
     } else {
         format!("{add_panel}<div class=\"cards\">{cards}</div>")
@@ -3684,13 +3848,16 @@ fn render_add_weapon_panel(state: &AppState) -> String {
                 .to_string()
 }
 
-fn render_add_equip_panel(state: &AppState, delete_mode: bool) -> String {
+fn render_add_equip_panel(state: &AppState, delete_mode: bool, lock_mode: bool) -> String {
         let _ = state;
     if delete_mode {
         "<div class=\"panel\"><h3>Discs</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs\">Exit delete mode</a></div></div>"
             .to_string()
+    } else if lock_mode {
+        "<div class=\"panel\"><h3>Discs</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs\">Exit lock mode</a></div></div>"
+            .to_string()
     } else {
-        "<div class=\"panel\"><h3>Add Disc</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs&delete=1\">Delete discs</a></div></div>"
+        "<div class=\"panel\"><h3>Add Disc</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs&delete=1\">Delete discs</a><a href=\"/dashboard?tab=discs&lock=1\">Lock discs</a></div></div>"
             .to_string()
     }
 }
@@ -5431,6 +5598,33 @@ fn zon_set_number(value: &mut ZValue, field: &str, num: i64) {
             return;
         }
         fields.push((field.to_string(), ZValue::Number(num)));
+    }
+}
+
+fn zon_get_bool(value: &ZValue, field: &str) -> Option<bool> {
+    match value {
+        ZValue::Object(fields) => fields.iter().find_map(|(k, v)| {
+            if k == field {
+                if let ZValue::Bool(b) = v {
+                    Some(*b)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    }
+}
+
+fn zon_set_bool(value: &mut ZValue, field: &str, b: bool) {
+    if let ZValue::Object(fields) = value {
+        if let Some((_, v)) = fields.iter_mut().find(|(k, _)| k == field) {
+            *v = ZValue::Bool(b);
+            return;
+        }
+        fields.push((field.to_string(), ZValue::Bool(b)));
     }
 }
 
