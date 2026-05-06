@@ -128,6 +128,13 @@ pub(crate) fn html_escape_attr(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+pub(crate) fn html_escape_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 pub(crate) fn redirect_to_login(original_uri: &axum::http::Uri) -> Response {
     let attempted = original_uri
         .path_and_query()

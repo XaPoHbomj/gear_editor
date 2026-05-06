@@ -2,13 +2,13 @@ use crate::{
     AppState,
     app_state::{ServerMode, parse_server_mode},
     auth::{
-        get_session, html_escape_attr, insert_session, redirect_to_login, sanitize_next_path,
-        set_session, validate_login,
+        get_session, html_escape_attr, html_escape_text, insert_session, redirect_to_login,
+        sanitize_next_path, set_session, url_encode_component, validate_login,
     },
 };
 use axum::{
     extract::{Form, OriginalUri, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -23,6 +23,7 @@ pub(crate) struct LoginForm {
 #[derive(Deserialize)]
 pub(crate) struct LoginQuery {
     next: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -37,31 +38,45 @@ pub(crate) async fn login_page(Query(query): Query<LoginQuery>) -> Html<String> 
         .as_deref()
         .and_then(sanitize_next_path)
         .unwrap_or_else(|| "/dashboard".to_string());
-    let next_attr = html_escape_attr(&next);
+    let error = query.error.as_deref().filter(|e| !e.is_empty());
+    Html(render_login_form(&next, error))
+}
 
-    let body = r#"<!doctype html>
+fn render_login_form(next: &str, error: Option<&str>) -> String {
+    let next_attr = html_escape_attr(next);
+    let error_html = match error {
+        Some(msg) => format!(
+            "<div style=\"background:#3d1420;color:#fca5a5;border:1px solid #6b2136;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:0;\">{}</div>",
+            html_escape_text(msg)
+        ),
+        None => String::new(),
+    };
+
+    format!(
+        r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gear Editor - Login</title>
   <style>
-        body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; height: 100vh; margin: 0; }
-        form { background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 12px; }
-    h1 { font-size: 18px; margin: 0; }
-    .field { display: flex; flex-direction: column; gap: 6px; }
-    label { display: block; margin: 0; font-size: 12px; color: #9aa4b2; }
-    input { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }
-    button { width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }
-        @media (max-width: 768px) {
-            body { display: flex; align-items: center; justify-content: center; height: auto; min-height: 100vh; padding: 16px; box-sizing: border-box; }
-            form { width: 100%; max-width: 420px; margin: 0; box-sizing: border-box; }
-        }
+        body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; height: 100vh; margin: 0; }}
+        form {{ background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 12px; }}
+    h1 {{ font-size: 18px; margin: 0; }}
+    .field {{ display: flex; flex-direction: column; gap: 6px; }}
+    label {{ display: block; margin: 0; font-size: 12px; color: #9aa4b2; }}
+    input {{ width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+    button {{ width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
+        @media (max-width: 768px) {{
+            body {{ display: flex; align-items: center; justify-content: center; height: auto; min-height: 100vh; padding: 16px; box-sizing: border-box; }}
+            form {{ width: 100%; max-width: 420px; margin: 0; box-sizing: border-box; }}
+        }}
   </style>
 </head>
 <body>
   <form method="post" action="/login">
     <h1>Gear Editor</h1>
+        {error}
         <input type="hidden" name="next" value="{next_attr}" />
         <div class="field">
             <label for="username">Username</label>
@@ -74,39 +89,63 @@ pub(crate) async fn login_page(Query(query): Query<LoginQuery>) -> Html<String> 
     <button type="submit">Sign in</button>
   </form>
 </body>
-</html>"#
-    .replace("{next_attr}", &next_attr);
-
-    Html(body)
+</html>"#,
+        error = error_html,
+        next_attr = next_attr,
+    )
 }
 
 pub(crate) async fn login(
     State(state): State<AppState>,
     Form(payload): Form<LoginForm>,
 ) -> impl IntoResponse {
-    let response: Response =
-        match validate_login(&state.db_path, &payload.username, &payload.password) {
-            Ok(Some(session)) => {
-                let session_id = insert_session(session);
+    let username = payload.username.trim().to_string();
+    let response: Response = match validate_login(&state.db_path, &username, &payload.password) {
+        Ok(Some(session)) => {
+            let session_id = insert_session(session);
 
-                let mut headers = HeaderMap::new();
-                headers.insert(
-                    header::SET_COOKIE,
-                    format!("ge_session={}; HttpOnly; SameSite=Lax; Path=/", session_id)
-                        .parse()
-                        .unwrap(),
-                );
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::SET_COOKIE,
+                format!("ge_session={}; HttpOnly; SameSite=Lax; Path=/", session_id)
+                    .parse()
+                    .unwrap(),
+            );
 
-                let next = payload
-                    .next
-                    .as_deref()
-                    .and_then(sanitize_next_path)
-                    .unwrap_or_else(|| "/dashboard".to_string());
-                (headers, Redirect::to(&next)).into_response()
-            }
-            Ok(None) => (StatusCode::UNAUTHORIZED, Html("Invalid credentials")).into_response(),
-            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Html("Login failed")).into_response(),
-        };
+            let next = payload
+                .next
+                .as_deref()
+                .and_then(sanitize_next_path)
+                .unwrap_or_else(|| "/dashboard".to_string());
+            (headers, Redirect::to(&next)).into_response()
+        }
+        Ok(None) => {
+            let next = payload
+                .next
+                .as_deref()
+                .and_then(sanitize_next_path)
+                .unwrap_or_else(|| "/dashboard".to_string());
+            let location = format!(
+                "/?next={}&error={}",
+                url_encode_component(&next),
+                url_encode_component("Invalid username or password")
+            );
+            Redirect::to(&location).into_response()
+        }
+        Err(_) => {
+            let next = payload
+                .next
+                .as_deref()
+                .and_then(sanitize_next_path)
+                .unwrap_or_else(|| "/dashboard".to_string());
+            let location = format!(
+                "/?next={}&error={}",
+                url_encode_component(&next),
+                url_encode_component("Login failed. Please try again.")
+            );
+            Redirect::to(&location).into_response()
+        }
+    };
 
     response
 }

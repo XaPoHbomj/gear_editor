@@ -1,6 +1,6 @@
 use crate::{
     app_state::{AppState, state_with_active_server},
-    auth::{get_session, get_session_mut, redirect_to_login, set_session},
+    auth::{get_session, get_session_mut, html_escape_text, redirect_to_login, set_session},
     player_state::resolve_player_uid,
     zon::{
         ZValue, format_zon_pretty, read_zon, read_zon_verbose, zon_get_entrance_zone_id,
@@ -124,13 +124,6 @@ fn clean_rich_text(text: &str) -> String {
         .trim_start_matches('.')
         .trim()
         .to_string()
-}
-
-fn html_escape_text(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 fn render_rich_text(text: &str) -> String {
