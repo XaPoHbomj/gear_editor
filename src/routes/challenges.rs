@@ -1,6 +1,7 @@
 use crate::{
     app_state::{AppState, state_with_active_server},
     auth::{get_session, get_session_mut, html_escape_text, redirect_to_login, set_session},
+    i18n::{Locale, locale_from_headers, t},
     player_state::resolve_player_uid,
     zon::{
         ZValue, format_zon_pretty, read_zon, read_zon_verbose, zon_get_entrance_zone_id,
@@ -69,14 +70,14 @@ fn element_icon_path(element: &str) -> &'static str {
     }
 }
 
-fn element_label(element: &str) -> &'static str {
+fn element_label(locale: Locale, element: &str) -> &str {
     match element.to_lowercase().as_str() {
-        "ice" => "Ice",
-        "fire" => "Fire",
-        "electric" => "Electric",
-        "ether" => "Ether",
-        "physical" => "Physical",
-        "wind" => "Wind",
+        "ice" => t(locale, "element.ice"),
+        "fire" => t(locale, "element.fire"),
+        "electric" => t(locale, "element.electric"),
+        "ether" => t(locale, "element.ether"),
+        "physical" => t(locale, "element.physical"),
+        "wind" => t(locale, "element.wind"),
         _ => "",
     }
 }
@@ -271,6 +272,7 @@ fn shiyu_floor_boss_names(zones: &[(u32, JsonValue)]) -> Vec<String> {
 fn shiyu_render_monster_card(
     monster: &JsonValue,
     weakness: Option<&serde_json::Map<String, JsonValue>>,
+    locale: Locale,
 ) -> String {
     let empty_map = serde_json::Map::new();
     let boss_name = monster
@@ -315,7 +317,7 @@ fn shiyu_render_monster_card(
         .filter_map(|(_, v)| {
             if let Some(elem) = v.as_str() {
                 let icon_path = element_icon_path(elem);
-                let label = element_label(elem);
+                let label = element_label(locale, elem);
                 if icon_path.is_empty() || label.is_empty() {
                     None
                 } else {
@@ -336,7 +338,7 @@ fn shiyu_render_monster_card(
         .filter_map(|(e, v)| {
             if v.as_i64() == Some(-1) {
                 let icon_path = element_icon_path(e);
-                let label = element_label(e);
+                let label = element_label(locale, e);
                 if icon_path.is_empty() || label.is_empty() {
                     None
                 } else {
@@ -392,8 +394,8 @@ fn shiyu_render_monster_card(
     )
 }
 
-pub(crate) fn render_da_panel(state: &AppState, uid: u32) -> String {
-    let dump_dir = &state.dump_dir;
+pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> String {
+    let dump_dir = state.dump_lang_dir(locale);
     let boss_details_path = dump_dir.join("boss_details.json");
     let zone_info_path = state.asset_dir.join("ZoneInfoTemplateTb.json");
 
@@ -535,8 +537,8 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32) -> String {
     format!("<div class=\"cards\">{cards}</div>")
 }
 
-pub(crate) fn render_shiyu_panel(state: &AppState, uid: u32) -> String {
-    let dump_dir = &state.dump_dir;
+pub(crate) fn render_shiyu_panel(state: &AppState, uid: u32, locale: Locale) -> String {
+    let dump_dir = state.dump_lang_dir(locale);
     let shiyu_details_path = dump_dir.join("shiyu_details.json");
     let zone_info_path = state.asset_dir.join("ZoneInfoTemplateTb.json");
 
@@ -647,8 +649,10 @@ pub(crate) fn render_shiyu_panel(state: &AppState, uid: u32) -> String {
 pub(crate) async fn da_detail(
     State(state): State<AppState>,
     Path(id): Path<u32>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    let dump_dir = &state.dump_dir;
+    let locale = locale_from_headers(&headers);
+    let dump_dir = state.dump_lang_dir(locale);
     let boss_details_path = dump_dir.join("boss_details.json");
 
     if let Ok(content) = fs::read_to_string(&boss_details_path) {
@@ -766,29 +770,29 @@ pub(crate) async fn da_detail(
                                     .filter_map(|(e, v)| {
                                         if v.as_i64() == Some(1) {
                                             let icon_path = element_icon_path(e);
-                                            let label = element_label(e);
-                                            if icon_path.is_empty() || label.is_empty() {
-                                                None
+                                                let label = element_label(locale, e);
+                                                if icon_path.is_empty() || label.is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(format!(
+                                                        r#"<span style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; vertical-align:middle;"><img src="{}" alt="{}" title="{}" style="width: 18px; height: 18px; display:block;" />{}</span>"#,
+                                                        icon_path, label, label, label
+                                                    ))
+                                                }
                                             } else {
-                                                Some(format!(
-                                                    r#"<span style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; vertical-align:middle;"><img src="{}" alt="{}" title="{}" style="width: 18px; height: 18px; display:block;" />{}</span>"#,
-                                                    icon_path, label, label, label
-                                                ))
+                                                None
                                             }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                                        })
+                                        .collect();
                                 let weakness_str = weakness_badges.join("");
 
                                 let resistance_badges: Vec<String> = element
-                                    .iter()
-                                    .filter_map(|(e, v)| {
-                                        if v.as_i64() == Some(-1) {
-                                            let icon_path = element_icon_path(e);
-                                            let label = element_label(e);
-                                            if icon_path.is_empty() || label.is_empty() {
+                                        .iter()
+                                        .filter_map(|(e, v)| {
+                                            if v.as_i64() == Some(-1) {
+                                                let icon_path = element_icon_path(e);
+                                                let label = element_label(locale, e);
+                                                if icon_path.is_empty() || label.is_empty() {
                                                 None
                                             } else {
                                                 Some(format!(
@@ -948,8 +952,10 @@ pub(crate) async fn shiyu_detail(
     State(state): State<AppState>,
     Path(id): Path<u32>,
     Query(query): Query<ShiyuDetailQuery>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    let dump_dir = &state.dump_dir;
+    let locale = locale_from_headers(&headers);
+    let dump_dir = state.dump_lang_dir(locale);
     let shiyu_details_path = dump_dir.join("shiyu_details.json");
 
     if let Ok(content) = fs::read_to_string(&shiyu_details_path) {
@@ -1095,7 +1101,11 @@ pub(crate) async fn shiyu_detail(
 
                     let mut monster_cards = String::new();
                     for monster in monsters {
-                        monster_cards.push_str(&shiyu_render_monster_card(monster, room_weakness));
+                        monster_cards.push_str(&shiyu_render_monster_card(
+                            monster,
+                            room_weakness,
+                            locale,
+                        ));
                     }
 
                     let room_buff_html = if is_new_style && selected_floor == 5 {

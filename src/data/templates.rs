@@ -1,6 +1,7 @@
 use crate::{
     app_state::AppState,
     data::hakushin::load_hakushin_data,
+    i18n::{Locale, t},
     zon::{read_zon, zon_get_number},
 };
 use serde_json::Value as JsonValue;
@@ -109,10 +110,14 @@ pub(crate) fn load_weapon_templates(asset_dir: &FsPath) -> HashMap<u32, String> 
     parse_json_map(&data, "item_id", "weapon_name")
 }
 
-pub(crate) fn load_player_weapons(state: &AppState, uid: u32) -> Vec<(u32, String)> {
+pub(crate) fn load_player_weapons(
+    state: &AppState,
+    uid: u32,
+    locale: Locale,
+) -> Vec<(u32, String)> {
     let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
     let weapon_templates = load_weapon_templates(&state.asset_dir);
-    let hakushin = load_hakushin_data(state);
+    let hakushin = load_hakushin_data(state, locale);
     let mut result = Vec::new();
 
     if let Ok(entries) = fs::read_dir(&weapon_dir) {
@@ -138,7 +143,7 @@ pub(crate) fn load_player_weapons(state: &AppState, uid: u32) -> Vec<(u32, Strin
                 .get(&weapon_id)
                 .map(|entry| entry.name.clone())
                 .or_else(|| weapon_templates.get(&weapon_id).cloned())
-                .unwrap_or_else(|| format!("Weapon {weapon_id}"));
+                .unwrap_or_else(|| format!("{} {weapon_id}", t(locale, "fallback.weapon")));
             result.push((uid, format!("{} (UID {})", name, uid)));
         }
     }
@@ -147,12 +152,17 @@ pub(crate) fn load_player_weapons(state: &AppState, uid: u32) -> Vec<(u32, Strin
     result
 }
 
-pub(crate) fn render_weapon_select(current_uid: u32, options: &[(u32, String)]) -> String {
+pub(crate) fn render_weapon_select(
+    locale: Locale,
+    current_uid: u32,
+    options: &[(u32, String)],
+) -> String {
     let mut html = String::new();
     html.push_str("<select name=\"cur_weapon_uid\">");
     html.push_str(&format!(
-        "<option value=\"0\"{}>None</option>",
-        if current_uid == 0 { " selected" } else { "" }
+        "<option value=\"0\"{}>{}</option>",
+        if current_uid == 0 { " selected" } else { "" },
+        t(locale, "none")
     ));
     for (uid, label) in options {
         html.push_str(&format!(
@@ -188,10 +198,14 @@ pub(crate) fn load_equip_templates(asset_dir: &FsPath) -> HashMap<u32, String> {
     result
 }
 
-pub(crate) fn load_player_equips(state: &AppState, uid: u32) -> Vec<(u32, u32, String)> {
+pub(crate) fn load_player_equips(
+    state: &AppState,
+    uid: u32,
+    locale: Locale,
+) -> Vec<(u32, u32, String)> {
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let equip_templates = load_equip_templates(&state.asset_dir);
-    let hakushin = load_hakushin_data(state);
+    let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
     let mut result = Vec::new();
 
@@ -219,7 +233,7 @@ pub(crate) fn load_player_equips(state: &AppState, uid: u32) -> Vec<(u32, u32, S
                 .get(&set_id)
                 .map(|entry| entry.name.clone())
                 .or_else(|| equip_templates.get(&equip_item_id).cloned())
-                .unwrap_or_else(|| format!("Disc {equip_item_id}"));
+                .unwrap_or_else(|| format!("{} {equip_item_id}", t(locale, "fallback.disc")));
             let slot = equip_slot(equip_item_id, equip_index);
             result.push((uid, slot, format!("{} (UID {})", name, uid)));
         }
@@ -229,18 +243,25 @@ pub(crate) fn load_player_equips(state: &AppState, uid: u32) -> Vec<(u32, u32, S
     result
 }
 
-pub(crate) fn render_equip_selects(options: &[(u32, u32, String)], equipped: &[u32]) -> String {
+pub(crate) fn render_equip_selects(
+    locale: Locale,
+    options: &[(u32, u32, String)],
+    equipped: &[u32],
+) -> String {
     let mut html = String::new();
     for slot in 0..6 {
         let current = *equipped.get(slot).unwrap_or(&0);
-        html.push_str("<div><label>Slot ");
+        html.push_str("<div><label>");
+        html.push_str(t(locale, "slot"));
+        html.push_str(" ");
         html.push_str(&(slot + 1).to_string());
         html.push_str("</label><select name=\"equip_slot_");
         html.push_str(&(slot + 1).to_string());
         html.push_str("\">");
         html.push_str(&format!(
-            "<option value=\"0\"{}>Empty</option>",
-            if current == 0 { " selected" } else { "" }
+            "<option value=\"0\"{}>{}</option>",
+            if current == 0 { " selected" } else { "" },
+            t(locale, "empty"),
         ));
         for (uid, opt_slot, label) in options {
             if *opt_slot != (slot as u32 + 1) {

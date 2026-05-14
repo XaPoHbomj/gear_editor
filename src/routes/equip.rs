@@ -12,6 +12,7 @@ use crate::{
         disk_main_base_value, disk_main_stat_options, disk_sub_base_value, disk_sub_stat_options,
         normalize_disk_main_stat, stat_label,
     },
+    i18n::{Locale, locale_from_headers, t},
     player_state::{
         parse_slot_value, read_next_uid, render_equip_substat_script, render_slot_options,
         render_stat_select_options, render_sub_stat_rows, resolve_player_uid,
@@ -86,23 +87,25 @@ pub(crate) async fn equip_edit(
         .state_dir
         .join(format!("player/{uid}/equip/{equip_uid}"));
 
+    let locale = locale_from_headers(&headers);
+
     let Some(equip_zon) = read_zon(&equip_path) else {
-        return (StatusCode::NOT_FOUND, Html("Disc not found")).into_response();
+        return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
     let level = zon_get_number(&equip_zon, "level").unwrap_or(0) as u32;
     let locked = zon_get_bool(&equip_zon, "lock").unwrap_or(false);
     let lock_checked = if locked { "checked" } else { "" };
     let equip_item_id = zon_get_number(&equip_zon, "id").unwrap_or(0) as u32;
-    let hakushin = load_hakushin_data(&state);
+    let hakushin = load_hakushin_data(&state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
     let set_id = equip_set_id(equip_item_id, equip_index);
-    let slot = equip_slot(equip_item_id, equip_index);
+    let num_slot = equip_slot(equip_item_id, equip_index);
     let equip_name = hakushin
         .discs
         .get(&set_id)
         .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| format!("Disc {equip_item_id}"));
+        .unwrap_or_else(|| format!("{} {equip_item_id}", t(locale, "fallback.disc")));
     let equip_img = hakushin
         .discs
         .get(&set_id)
@@ -111,8 +114,8 @@ pub(crate) async fn equip_edit(
         .unwrap_or_else(|| svg_data_uri(&equip_name));
     let (main_key, _, _) = zon_get_main_property(&equip_zon);
     let sub_props = zon_get_sub_properties_list(&equip_zon);
-    let main_options = disk_main_stat_options(slot);
-    let normalized_main_key = normalize_disk_main_stat(slot, main_key)
+    let main_options = disk_main_stat_options(num_slot);
+    let normalized_main_key = normalize_disk_main_stat(num_slot, main_key)
         .unwrap_or_else(|| main_options.first().copied().unwrap_or(0));
     let sub_options = disk_sub_stat_options(normalized_main_key);
     let mut sub_options_by_main = HashMap::new();
@@ -122,12 +125,12 @@ pub(crate) async fn equip_edit(
         for key in options {
             label_map
                 .entry(key)
-                .or_insert_with(|| stat_label(&state, key));
+                .or_insert_with(|| stat_label(&state, locale, key));
             let sub_opts = disk_sub_stat_options(key);
             for sub_key in &sub_opts {
                 label_map
                     .entry(*sub_key)
-                    .or_insert_with(|| stat_label(&state, *sub_key));
+                    .or_insert_with(|| stat_label(&state, locale, *sub_key));
             }
             sub_options_by_main.insert(key, sub_opts);
         }
@@ -139,11 +142,11 @@ pub(crate) async fn equip_edit(
 
     let body = format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Edit Disc</title>
+    <title>{edit_title}</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
     .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
@@ -163,33 +166,33 @@ pub(crate) async fn equip_edit(
         <div class="hero">
             <img src="{equip_img}" alt="{equip_name}" />
             <div>
-                <h1>Edit Disc {equip_name}</h1>
-                <div class="meta">UID {equip_uid} · Item {equip_item_id} · Slot {slot}</div>
+                <h1>{edit_title} {equip_name}</h1>
+                <div class="meta">{uid_label} {equip_uid} · {item_label} {equip_item_id} · {slot_label} {slot_num}</div>
             </div>
         </div>
     <form method="post">
-      <label>Level</label>
+      <label>{level_label}</label>
       <input name="level" type="number" min="0" value="{level}" />
-      <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" name="lock" value="1" {lock_checked} style="width:auto;" /> Lock disc (prevent deletion)</label>
+      <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" name="lock" value="1" {lock_checked} style="width:auto;" /> {lock_toggle}</label>
 
-            <h3>Main stat</h3>
+            <h3>{main_stat_heading}</h3>
             <div class="row">
                 <div>
-                    <label>Stat</label>
+                    <label>{stat_label_str}</label>
                     <select name="main_key" id="main_key">
                         {main_options}
                     </select>
                 </div>
             </div>
 
-            <h3>Secondary stats</h3>
+            <h3>{sub_stats_heading}</h3>
             <div class="row">
                 {sub_stat_rows}
             </div>
         {script}
       {warning}
 
-      <button type="submit">Save (pending)</button>
+      <button type="submit">{save_label}</button>
     </form>
   </div>
 </body>
@@ -198,13 +201,31 @@ pub(crate) async fn equip_edit(
         equip_item_id = equip_item_id,
         equip_name = html_escape_attr(&equip_name),
         equip_img = html_escape_attr(&equip_img),
-        slot = slot,
+        slot_num = num_slot,
         level = level,
         lock_checked = lock_checked,
-        main_options = render_stat_select_options(&state, &main_options, normalized_main_key),
-        sub_stat_rows = render_sub_stat_rows(&state, &sub_props, &sub_options, normalized_main_key),
+        main_options =
+            render_stat_select_options(&state, &main_options, normalized_main_key, locale),
+        sub_stat_rows = render_sub_stat_rows(
+            &state,
+            &sub_props,
+            &sub_options,
+            normalized_main_key,
+            locale
+        ),
         script = script,
         warning = warning,
+        edit_title = t(locale, "disc.edit"),
+        uid_label = t(locale, "disc.uid"),
+        item_label = t(locale, "disc.item"),
+        slot_label = t(locale, "disc.slot"),
+        level_label = t(locale, "disc.level"),
+        lock_toggle = t(locale, "disc.lock_toggle"),
+        main_stat_heading = t(locale, "disc.main_stat"),
+        stat_label_str = t(locale, "disc.stat"),
+        sub_stats_heading = t(locale, "disc.sub_stats"),
+        save_label = t(locale, "disc.save"),
+        lang = locale.lang_attr(),
     );
 
     Html(body).into_response()
@@ -227,8 +248,10 @@ pub(crate) async fn equip_update(
         .state_dir
         .join(format!("player/{uid}/equip/{equip_uid}"));
 
+    let locale = locale_from_headers(&headers);
+
     let Some(mut equip_zon) = read_zon(&equip_path) else {
-        return (StatusCode::NOT_FOUND, Html("Disc not found")).into_response();
+        return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
     if zon_get_number(&equip_zon, "star").is_none() {
@@ -314,12 +337,13 @@ pub(crate) async fn equip_new(
     };
 
     let state = state_with_active_server(&state, &headers);
+    let locale = locale_from_headers(&headers);
 
-    let options = render_disc_select_options(&state, 0);
-    let slot_options = render_slot_options(1);
-    let main_options = render_stat_select_options(&state, &disk_main_stat_options(1), 0);
+    let options = render_disc_select_options(&state, 0, locale);
+    let slot_options = render_slot_options(locale, 1);
+    let main_options = render_stat_select_options(&state, &disk_main_stat_options(1), 0, locale);
     let sub_options = disk_sub_stat_options(0);
-    let sub_stat_rows = render_sub_stat_rows(&state, &[], &sub_options, 0);
+    let sub_stat_rows = render_sub_stat_rows(&state, &[], &sub_options, 0, locale);
 
     let mut main_options_by_slot = HashMap::new();
     let mut sub_options_by_main = HashMap::new();
@@ -329,12 +353,12 @@ pub(crate) async fn equip_new(
         for key in &options {
             label_map
                 .entry(*key)
-                .or_insert_with(|| stat_label(&state, *key));
+                .or_insert_with(|| stat_label(&state, locale, *key));
             let sub_opts = disk_sub_stat_options(*key);
             for sub_key in &sub_opts {
                 label_map
                     .entry(*sub_key)
-                    .or_insert_with(|| stat_label(&state, *sub_key));
+                    .or_insert_with(|| stat_label(&state, locale, *sub_key));
             }
             sub_options_by_main.insert(*key, sub_opts);
         }
@@ -350,13 +374,22 @@ pub(crate) async fn equip_new(
         &label_map_json,
     );
 
+    let new_title = t(locale, "disc.new");
+    let disc_set_label = t(locale, "disc.set");
+    let slot_label = t(locale, "disc.slot");
+    let stat_label_str = t(locale, "disc.stat");
+    let main_stat_heading = t(locale, "disc.main_stat");
+    let sub_stats_heading = t(locale, "disc.sub_stats");
+    let create_label = t(locale, "disc.create");
+    let lang = locale.lang_attr();
+
     let body = format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>New Disc</title>
+    <title>{new_title}</title>
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
@@ -374,39 +407,39 @@ pub(crate) async fn equip_new(
 </head>
 <body>
     <div class="container">
-        <h1>New Disc</h1>
+        <h1>{new_title}</h1>
         <form method="post">
             <div>
-                <label>Disc set</label>
+                <label>{disc_set_label}</label>
                 <select name="equip_set_id" required>
                     {options}
                 </select>
             </div>
             <div class="row">
                 <div>
-                    <label>Slot</label>
+                    <label>{slot_label}</label>
                     <select name="equip_slot" id="equip_slot">
                         {slot_options}
                     </select>
                 </div>
             </div>
 
-            <h3>Main stat</h3>
+            <h3>{main_stat_heading}</h3>
             <div class="row">
                 <div>
-                    <label>Stat</label>
+                    <label>{stat_label_str}</label>
                     <select name="main_key" id="main_key">
                         {main_options}
                     </select>
                 </div>
             </div>
 
-            <h3>Secondary stats</h3>
+            <h3>{sub_stats_heading}</h3>
             <div class="row">
                 {sub_stat_rows}
             </div>
             {script}
-            <button type="submit">Create</button>
+            <button>{create_label}</button>
         </form>
     </div>
 </body>
@@ -416,6 +449,14 @@ pub(crate) async fn equip_new(
         main_options = main_options,
         sub_stat_rows = sub_stat_rows,
         script = script,
+        new_title = new_title,
+        disc_set_label = disc_set_label,
+        slot_label = slot_label,
+        stat_label_str = stat_label_str,
+        main_stat_heading = main_stat_heading,
+        sub_stats_heading = sub_stats_heading,
+        create_label = create_label,
+        lang = lang,
     );
 
     Html(body).into_response()
@@ -432,6 +473,7 @@ pub(crate) async fn equip_add(
     };
 
     let state = state_with_active_server(&state, &headers);
+    let locale = locale_from_headers(&headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let next_uid = read_next_uid(&equip_dir).unwrap_or(1);
@@ -442,7 +484,7 @@ pub(crate) async fn equip_add(
     else {
         return (
             StatusCode::BAD_REQUEST,
-            Html("Invalid disc set/slot combination"),
+            Html(t(locale, "disc.invalid_set_slot")),
         )
             .into_response();
     };
@@ -537,7 +579,7 @@ pub(crate) async fn equip_add(
     if let Err(err) = fs::write(&equip_path, serialized) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("Failed to create disc: {}", err)),
+            Html(format!("{}: {}", t(locale, "disc.failed_create"), err)),
         )
             .into_response();
     }
@@ -546,7 +588,7 @@ pub(crate) async fn equip_add(
     if let Err(err) = fs::write(&next_path, format!("{}\n", new_uid + 1)) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("Failed to update disc counter: {}", err)),
+            Html(format!("{}: {}", t(locale, "disc.failed_counter"), err)),
         )
             .into_response();
     }
@@ -565,16 +607,24 @@ pub(crate) async fn equip_generate(
     };
 
     let state = state_with_active_server(&state, &headers);
+    let locale = locale_from_headers(&headers);
 
-    let options = render_disc_select_options(&state, 0);
-    let slot_options = render_generate_slot_options(None);
+    let options = render_disc_select_options(&state, 0, locale);
+    let gen_title = t(locale, "disc.generate");
+    let gen_desc = t(locale, "disc.generate_desc");
+    let disc_set_label = t(locale, "disc.set");
+    let slot_label = t(locale, "disc.slot");
+    let count_label = t(locale, "disc.count");
+    let gen_btn = t(locale, "disc.generate_btn");
+    let lang = locale.lang_attr();
+    let slot_options = render_generate_slot_options(None, locale);
     let body = format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Generate Discs</title>
+    <title>{gen_title}</title>
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
@@ -588,34 +638,41 @@ pub(crate) async fn equip_generate(
 </head>
 <body>
     <div class="container">
-        <h1>Generate Discs</h1>
-        <div class="meta">Each generated disc uses valid slot/main stat combinations, 4 unique substats, and total procs in range 8-9.</div>
+        <h1>{gen_title}</h1>
+        <div class="meta">{gen_desc}</div>
         <form method="post">
             <div>
-                <label>Disc set</label>
+                <label>{disc_set_label}</label>
                 <select name="equip_set_id" required>
                     {options}
                 </select>
             </div>
             <div class="row">
                 <div>
-                    <label>Slot</label>
+                    <label>{slot_label}</label>
                     <select name="slot">
                         {slot_options}
                     </select>
                 </div>
                 <div>
-                    <label>Count</label>
+                    <label>{count_label}</label>
                     <input name="count" type="number" min="1" max="200" value="10" required />
                 </div>
             </div>
-            <button type="submit">Generate</button>
+            <button>{gen_btn}</button>
         </form>
     </div>
 </body>
 </html>"#,
         options = options,
         slot_options = slot_options,
+        gen_title = gen_title,
+        gen_desc = gen_desc,
+        disc_set_label = disc_set_label,
+        slot_label = slot_label,
+        count_label = count_label,
+        gen_btn = gen_btn,
+        lang = lang,
     );
 
     Html(body).into_response()
@@ -631,16 +688,14 @@ pub(crate) async fn equip_generate_submit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let locale = locale_from_headers(&headers);
+
     if payload.count == 0 || payload.count > 200 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Html("Count must be between 1 and 200"),
-        )
-            .into_response();
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.count_range"))).into_response();
     }
     let selected_slot = payload.slot.as_deref().map(parse_slot_value).unwrap_or(0);
     if selected_slot > 6 {
-        return (StatusCode::BAD_REQUEST, Html("Slot must be 0..6")).into_response();
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.slot_range"))).into_response();
     }
 
     let state = state_with_active_server(&state, &headers);
@@ -656,6 +711,7 @@ pub(crate) async fn equip_generate_submit(
             selected_slot,
             equip_index,
             &mut rng,
+            locale,
         ) {
             Ok(value) => value,
             Err(message) => return (StatusCode::BAD_REQUEST, Html(message)).into_response(),
@@ -669,7 +725,7 @@ pub(crate) async fn equip_generate_submit(
         if let Err(err) = fs::write(&equip_path, serialized) {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html(format!("Failed to create generated disc: {}", err)),
+                Html(format!("{}: {}", t(locale, "disc.failed_create_gen"), err)),
             )
                 .into_response();
         }
@@ -681,7 +737,7 @@ pub(crate) async fn equip_generate_submit(
     if let Err(err) = fs::write(&next_path, format!("{}\n", next_uid)) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("Failed to update disc counter: {}", err)),
+            Html(format!("{}: {}", t(locale, "disc.failed_counter"), err)),
         )
             .into_response();
     }
@@ -853,6 +909,7 @@ fn generate_random_disc(
     selected_slot: u32,
     equip_index: &EquipTemplateIndex,
     rng: &mut impl Rng,
+    locale: Locale,
 ) -> Result<ZValue, String> {
     let mut slots = Vec::new();
     for slot in 1..=6 {
@@ -861,35 +918,35 @@ fn generate_random_disc(
         }
     }
     if slots.is_empty() {
-        return Err("Invalid disc set".to_string());
+        return Err(t(locale, "disc.invalid_set").to_string());
     }
 
     let slot = if selected_slot == 0 {
         *slots
             .choose(rng)
-            .ok_or_else(|| "No slots for disc set".to_string())?
+            .ok_or_else(|| t(locale, "disc.no_slots").to_string())?
     } else {
         if !(1..=6).contains(&selected_slot) {
-            return Err("Invalid slot".to_string());
+            return Err(t(locale, "disc.slot_range").to_string());
         }
         if !slots.contains(&selected_slot) {
-            return Err("Selected slot is not available for this disc set".to_string());
+            return Err(t(locale, "disc.slot_not_available").to_string());
         }
         selected_slot
     };
     let item_id = resolve_equip_item_id(set_id, slot, equip_index)
         .map(force_disc_fourth_digit)
-        .ok_or_else(|| "Invalid disc set/slot combination".to_string())?;
+        .ok_or_else(|| t(locale, "disc.invalid_set_slot").to_string())?;
 
     let main_options = disk_main_stat_options(slot);
     let main_key = *main_options
         .choose(rng)
-        .ok_or_else(|| "No valid main stats for selected slot".to_string())?;
+        .ok_or_else(|| t(locale, "disc.no_valid_main").to_string())?;
     let main_base = disk_main_base_value(main_key).unwrap_or(0);
 
     let mut allowed_subs = disk_sub_stat_options(main_key);
     if allowed_subs.len() < 4 {
-        return Err("Not enough valid substats for selected main stat".to_string());
+        return Err(t(locale, "disc.not_enough_substats").to_string());
     }
     allowed_subs.shuffle(rng);
     let keys: Vec<u32> = allowed_subs.into_iter().take(4).collect();
@@ -911,7 +968,7 @@ fn generate_random_disc(
         }
         let idx = *candidates
             .choose(rng)
-            .ok_or_else(|| "Failed to choose substat proc target".to_string())?;
+            .ok_or_else(|| t(locale, "disc.choose_failed").to_string())?;
         add[idx] += 1;
     }
 
@@ -941,11 +998,21 @@ pub(crate) fn render_equip_cards(
     uid: u32,
     delete_mode: bool,
     lock_mode: bool,
+    locale: Locale,
 ) -> String {
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let equip_templates = load_equip_templates(&state.asset_dir);
-    let hakushin = load_hakushin_data(state);
+    let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
+
+    let uid_label = t(locale, "disc.uid");
+    let set_label = t(locale, "disc.set");
+    let slot_label = t(locale, "disc.slot");
+    let level_label = t(locale, "disc.level");
+    let main_stat_label = t(locale, "disc.main_stat_label");
+    let sub_stats_lbl = t(locale, "disc.sub_stats_label");
+    let none_str = t(locale, "disc.none");
+    let fallback_disc = t(locale, "fallback.disc");
 
     let mut cards_data = Vec::new();
     if let Ok(entries) = fs::read_dir(&equip_dir) {
@@ -977,7 +1044,7 @@ pub(crate) fn render_equip_cards(
                 .get(&set_id)
                 .map(|entry| entry.name.clone())
                 .or_else(|| equip_templates.get(&equip_item_id).cloned())
-                .unwrap_or_else(|| format!("Disc {equip_item_id}"));
+                .unwrap_or_else(|| format!("{fallback_disc} {equip_item_id}"));
 
             let main_stat = equip
                 .as_ref()
@@ -991,7 +1058,7 @@ pub(crate) fn render_equip_cards(
                 .and_then(|entry| entry.image_local.as_deref())
                 .map(to_asset_url)
                 .unwrap_or_else(|| svg_data_uri(&name));
-            let main_label = stat_label(state, main_stat.0);
+            let main_label = stat_label(state, locale, main_stat.0);
             let sub_stats = equip
                 .as_ref()
                 .map(zon_get_sub_properties_list)
@@ -1003,18 +1070,20 @@ pub(crate) fn render_equip_cards(
             let lock_icon = if locked { " \u{1f512}" } else { "" };
 
             let sub_stats_text = if sub_stats.is_empty() {
-                "None".to_string()
+                none_str.to_string()
             } else {
                 sub_stats
                     .iter()
-                    .map(|(key, _, procs)| format!("{} x{}", stat_label(state, *key), procs))
+                    .map(|(key, _, procs)| {
+                        format!("{} x{}", stat_label(state, locale, *key), procs)
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             };
             let card_html = if delete_mode {
                 if locked {
                     format!(
-                        "<label class=\"card select-card locked\"><input type=\"checkbox\" disabled /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card locked\"><input type=\"checkbox\" disabled /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -1025,7 +1094,7 @@ pub(crate) fn render_equip_cards(
                     )
                 } else {
                     format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -1038,7 +1107,7 @@ pub(crate) fn render_equip_cards(
             } else if lock_mode {
                 if locked {
                     format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -1049,7 +1118,7 @@ pub(crate) fn render_equip_cards(
                     )
                 } else {
                     format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -1061,7 +1130,7 @@ pub(crate) fn render_equip_cards(
                 }
             } else {
                 format!(
-                    "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}{lock_icon}</span><h3>{name}</h3><div class=\"meta\">Set: {name}</div><div class=\"meta\">Slot: {slot}</div><div class=\"meta\">Level: {level}</div><div class=\"meta\">Main stat: {main_label}</div><div class=\"meta\">Sub stats: {sub_stats_text}</div></a>",
+                    "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}{lock_icon}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></a>",
                     uid = equip_uid,
                     name = html_escape_attr(&name),
                     level = level,
@@ -1083,17 +1152,33 @@ pub(crate) fn render_equip_cards(
     }
 
     if cards.is_empty() {
-        cards.push_str("<p class=\"meta\">No discs found for this account.</p>");
+        cards.push_str(&format!(
+            "<p class=\"meta\">{}</p>",
+            t(locale, "disc.no_discs")
+        ));
     }
 
-    let add_panel = render_add_equip_panel(state, delete_mode, lock_mode);
+    let add_panel = render_add_equip_panel(state, delete_mode, lock_mode, locale);
     if delete_mode {
-        let delete_panel = "<div class=\"panel\"><h3>Delete Mode</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">Delete selected discs</button><button class=\"danger\" type=\"submit\" formaction=\"/equip/delete-all-unlocked\" onclick=\"return confirm('Delete ALL unlocked discs?');\">Delete all unlocked</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
+        let delete_panel = format!(
+            "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">{}</button><button class=\"danger\" type=\"submit\" formaction=\"/equip/delete-all-unlocked\" onclick=\"return confirm('{}');\">{}</button><a href=\"/dashboard?tab=discs\">{}</a></div></div>",
+            t(locale, "disc.delete_mode"),
+            t(locale, "disc.delete_selected"),
+            t(locale, "disc.delete_all_unlocked"),
+            t(locale, "disc.delete_all_unlocked"),
+            t(locale, "disc.cancel"),
+        );
         format!(
-            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('Delete selected discs?');\">{delete_panel}<div class=\"cards\">{cards}</div></form>",
+            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}<div class=\"cards\">{cards}</div></form>",
+            t(locale, "disc.delete_selected"),
         )
     } else if lock_mode {
-        let lock_panel = "<div class=\"panel\"><h3>Lock Mode</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button type=\"submit\" formaction=\"/equip/lock-selected\">Lock selected</button><a href=\"/dashboard?tab=discs\">Cancel</a></div></div>";
+        let lock_panel = format!(
+            "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button type=\"submit\" formaction=\"/equip/lock-selected\">{}</button><a href=\"/dashboard?tab=discs\">{}</a></div></div>",
+            t(locale, "disc.lock_mode"),
+            t(locale, "disc.lock_selected"),
+            t(locale, "disc.cancel"),
+        );
         format!(
             "{add_panel}<form class=\"lock-form\" method=\"post\">{lock_panel}<div class=\"cards\">{cards}</div></form>",
         )
@@ -1102,43 +1187,61 @@ pub(crate) fn render_equip_cards(
     }
 }
 
-fn render_add_equip_panel(state: &AppState, delete_mode: bool, lock_mode: bool) -> String {
+fn render_add_equip_panel(
+    state: &AppState,
+    delete_mode: bool,
+    lock_mode: bool,
+    locale: Locale,
+) -> String {
     let _ = state;
+    let title = t(locale, "disc.title");
+    let add = t(locale, "disc.add");
+    let new_disc = t(locale, "disc.new_disc");
+    let generate_discs = t(locale, "disc.generate_discs");
+    let delete_discs = t(locale, "disc.delete_discs");
+    let lock_discs = t(locale, "disc.lock_discs");
+    let exit_delete = t(locale, "disc.exit_delete");
+    let exit_lock = t(locale, "disc.exit_lock");
     if delete_mode {
-        "<div class=\"panel\"><h3>Discs</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs\">Exit delete mode</a></div></div>"
-            .to_string()
+        format!(
+            "<div class=\"panel\"><h3>{title}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">{new_disc}</a><a href=\"/equip/generate\">{generate_discs}</a><a href=\"/dashboard?tab=discs\">{exit_delete}</a></div></div>"
+        )
     } else if lock_mode {
-        "<div class=\"panel\"><h3>Discs</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs\">Exit lock mode</a></div></div>"
-            .to_string()
+        format!(
+            "<div class=\"panel\"><h3>{title}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">{new_disc}</a><a href=\"/equip/generate\">{generate_discs}</a><a href=\"/dashboard?tab=discs\">{exit_lock}</a></div></div>"
+        )
     } else {
-        "<div class=\"panel\"><h3>Add Disc</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">New disc</a><a href=\"/equip/generate\">Generate discs</a><a href=\"/dashboard?tab=discs&delete=1\">Delete discs</a><a href=\"/dashboard?tab=discs&lock=1\">Lock discs</a></div></div>"
-            .to_string()
+        format!(
+            "<div class=\"panel\"><h3>{add}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">{new_disc}</a><a href=\"/equip/generate\">{generate_discs}</a><a href=\"/dashboard?tab=discs&delete=1\">{delete_discs}</a><a href=\"/dashboard?tab=discs&lock=1\">{lock_discs}</a></div></div>"
+        )
     }
 }
 
-fn render_generate_slot_options(selected: Option<u32>) -> String {
+fn render_generate_slot_options(selected: Option<u32>, locale: Locale) -> String {
     let mut html = String::new();
     html.push_str(&format!(
-        "<option value=\"\"{}>Not selected (random)</option>",
-        if selected.is_none() { " selected" } else { "" }
+        "<option value=\"\"{}>{}</option>",
+        if selected.is_none() { " selected" } else { "" },
+        t(locale, "disc.not_selected"),
     ));
     for slot in 1..=6 {
         html.push_str(&format!(
-            "<option value=\"{}\"{}>Slot {}</option>",
+            "<option value=\"{}\"{}>{} {}</option>",
             slot,
             if selected == Some(slot) {
                 " selected"
             } else {
                 ""
             },
+            t(locale, "slot"),
             slot
         ));
     }
     html
 }
 
-fn render_disc_select_options(state: &AppState, selected_id: u32) -> String {
-    let hakushin = load_hakushin_data(state);
+fn render_disc_select_options(state: &AppState, selected_id: u32, locale: Locale) -> String {
+    let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
     let known_sets: std::collections::HashSet<u32> = equip_index
         .by_suit_slot
@@ -1154,7 +1257,10 @@ fn render_disc_select_options(state: &AppState, selected_id: u32) -> String {
     items.sort_by(|a, b| a.1.cmp(&b.1));
 
     let mut html = String::new();
-    html.push_str("<option value=\"\" disabled selected>Select disc</option>");
+    html.push_str(&format!(
+        "<option value=\"\" disabled selected>{}</option>",
+        t(locale, "disc.select")
+    ));
     for (id, name) in items {
         html.push_str(&format!(
             "<option value=\"{}\"{}>{}</option>",

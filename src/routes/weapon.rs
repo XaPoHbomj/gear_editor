@@ -5,6 +5,7 @@ use crate::{
         hakushin::{load_hakushin_data, to_asset_url},
         templates::load_weapon_templates,
     },
+    i18n::{Locale, locale_from_headers, t},
     player_state::{read_next_uid, resolve_player_uid},
     utils::svg_data_uri,
     zon::{ZValue, format_zon_pretty, read_zon, zon_get_number, zon_serialize, zon_set_number},
@@ -39,6 +40,7 @@ pub(crate) async fn weapon_edit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let locale = locale_from_headers(&headers);
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let weapon_path = state
@@ -46,18 +48,18 @@ pub(crate) async fn weapon_edit(
         .join(format!("player/{uid}/weapon/{weapon_uid}"));
 
     let Some(weapon_zon) = read_zon(&weapon_path) else {
-        return (StatusCode::NOT_FOUND, Html("Weapon not found")).into_response();
+        return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
     };
 
     let level = zon_get_number(&weapon_zon, "level").unwrap_or(1) as u32;
     let refine_level = zon_get_number(&weapon_zon, "refine_level").unwrap_or(1) as u32;
     let weapon_id = zon_get_number(&weapon_zon, "id").unwrap_or(0) as u32;
-    let hakushin = load_hakushin_data(&state);
+    let hakushin = load_hakushin_data(&state, locale);
     let weapon_name = hakushin
         .weapons
         .get(&weapon_id)
         .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| format!("Weapon {weapon_id}"));
+        .unwrap_or_else(|| format!("{} {weapon_id}", t(locale, "fallback.weapon")));
     let weapon_img = hakushin
         .weapons
         .get(&weapon_id)
@@ -67,11 +69,11 @@ pub(crate) async fn weapon_edit(
 
     let body = format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Edit Weapon</title>
+    <title>{edit_title}</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
     .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
@@ -95,16 +97,16 @@ pub(crate) async fn weapon_edit(
         <div class="hero">
             <img src="{weapon_img}" alt="{weapon_name}" />
             <div>
-                <h1>Edit Weapon {weapon_name}</h1>
-                <div class="meta">UID {weapon_uid} · ID {weapon_id}</div>
+                <h1>{edit_title} {weapon_name}</h1>
+                <div class="meta">{uid_label} {weapon_uid} · {id_label} {weapon_id}</div>
             </div>
         </div>
     <form method="post">
-      <label>Level</label>
+      <label>{level_label}</label>
       <input name="level" type="number" min="1" value="{level}" />
-      <label>Overclock (refine level)</label>
+      <label>{overclock_label}</label>
       <input name="refine_level" type="number" min="0" value="{refine_level}" />
-      <button type="submit">Save (pending)</button>
+      <button type="submit">{save_label}</button>
     </form>
   </div>
 </body>
@@ -115,6 +117,13 @@ pub(crate) async fn weapon_edit(
         weapon_img = html_escape_attr(&weapon_img),
         level = level,
         refine_level = refine_level,
+        edit_title = t(locale, "weapon.edit"),
+        uid_label = t(locale, "weapon.uid"),
+        id_label = t(locale, "weapon.id"),
+        level_label = t(locale, "weapon.level"),
+        overclock_label = t(locale, "weapon.overclock"),
+        save_label = t(locale, "weapon.save"),
+        lang = locale.lang_attr(),
     );
 
     Html(body).into_response()
@@ -131,6 +140,7 @@ pub(crate) async fn weapon_update(
         return redirect_to_login(&original_uri.0);
     };
 
+    let locale = locale_from_headers(&headers);
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let weapon_path = state
@@ -138,7 +148,7 @@ pub(crate) async fn weapon_update(
         .join(format!("player/{uid}/weapon/{weapon_uid}"));
 
     let Some(mut weapon_zon) = read_zon(&weapon_path) else {
-        return (StatusCode::NOT_FOUND, Html("Weapon not found")).into_response();
+        return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
     };
 
     zon_set_number(&mut weapon_zon, "level", payload.level as i64);
@@ -160,15 +170,16 @@ pub(crate) async fn weapon_new(
         return redirect_to_login(&original_uri.0);
     };
 
-    let options = render_weapon_select_options(&state, 0);
+    let locale = locale_from_headers(&headers);
+    let options = render_weapon_select_options(&state, 0, locale);
 
     let body = format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>New Weapon</title>
+    <title>{new_title}</title>
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
@@ -186,26 +197,31 @@ pub(crate) async fn weapon_new(
 </head>
 <body>
     <div class="container">
-        <h1>New Weapon</h1>
+        <h1>{new_title}</h1>
         <form method="post">
             <div>
-                <label>Weapon</label>
+                <label>{weapon_label}</label>
                 <select name="weapon_id" required>
                     {options}
                 </select>
             </div>
             <div class="row">
                 <div>
-                    <label>Refine Level</label>
+                    <label>{refine_label}</label>
                     <input name="refine_level" type="number" min="0" value="1" />
                 </div>
             </div>
-            <button type="submit">Create</button>
+            <button type="submit">{create_label}</button>
         </form>
     </div>
 </body>
 </html>"#,
         options = options,
+        new_title = t(locale, "weapon.new"),
+        weapon_label = t(locale, "avatar.weapon"),
+        refine_label = t(locale, "weapon.refine_level"),
+        create_label = t(locale, "weapon.create"),
+        lang = locale.lang_attr(),
     );
 
     Html(body).into_response()
@@ -221,6 +237,7 @@ pub(crate) async fn weapon_add(
         return redirect_to_login(&original_uri.0);
     };
 
+    let locale = locale_from_headers(&headers);
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
@@ -247,7 +264,7 @@ pub(crate) async fn weapon_add(
     if let Err(err) = fs::write(&weapon_path, serialized) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("Failed to create weapon: {}", err)),
+            Html(format!("{}: {}", t(locale, "disc.failed_create"), err)),
         )
             .into_response();
     }
@@ -256,7 +273,7 @@ pub(crate) async fn weapon_add(
     if let Err(err) = fs::write(&next_path, format!("{}\n", new_uid + 1)) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("Failed to update weapon counter: {}", err)),
+            Html(format!("{}: {}", t(locale, "disc.failed_counter"), err)),
         )
             .into_response();
     }
@@ -265,10 +282,10 @@ pub(crate) async fn weapon_add(
     Redirect::to(&format!("/weapon/{new_uid}")).into_response()
 }
 
-pub(crate) fn render_weapon_cards(state: &AppState, uid: u32) -> String {
+pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale) -> String {
     let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
     let weapon_templates = load_weapon_templates(&state.asset_dir);
-    let hakushin = load_hakushin_data(state);
+    let hakushin = load_hakushin_data(state, locale);
 
     let mut cards = String::new();
     if let Ok(entries) = fs::read_dir(&weapon_dir) {
@@ -299,7 +316,7 @@ pub(crate) fn render_weapon_cards(state: &AppState, uid: u32) -> String {
                 .get(&weapon_id)
                 .map(|entry| entry.name.clone())
                 .or_else(|| weapon_templates.get(&weapon_id).cloned())
-                .unwrap_or_else(|| format!("Weapon {weapon_id}"));
+                .unwrap_or_else(|| format!("{} {weapon_id}", t(locale, "fallback.weapon")));
 
             let img = hakushin
                 .weapons
@@ -308,31 +325,39 @@ pub(crate) fn render_weapon_cards(state: &AppState, uid: u32) -> String {
                 .map(to_asset_url)
                 .unwrap_or_else(|| svg_data_uri(&name));
             cards.push_str(&format!(
-                "<a class=\"card\" href=\"/weapon/{uid}\"><img class=\"thumb\" style=\"object-fit: contain;\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">UID {uid}</span><h3>{name}</h3><div class=\"meta\">Level {level}</div></a>",
+                "<a class=\"card\" href=\"/weapon/{uid}\"><img class=\"thumb\" style=\"object-fit: contain;\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{level_label} {level}</div></a>",
                 uid = weapon_uid,
                 name = html_escape_attr(&name),
                 level = level,
-                img = html_escape_attr(&img)
+                img = html_escape_attr(&img),
+                uid_label = t(locale, "weapon.uid"),
+                level_label = t(locale, "weapon.level"),
             ));
         }
     }
 
     if cards.is_empty() {
-        cards.push_str("<p class=\"meta\">No weapons found for this account.</p>");
+        cards.push_str(&format!(
+            "<p class=\"meta\">{}</p>",
+            t(locale, "weapon.no_weapons")
+        ));
     }
 
-    let add_panel = render_add_weapon_panel(state);
+    let add_panel = render_add_weapon_panel(state, locale);
     format!("{add_panel}<div class=\"cards\">{cards}</div>")
 }
 
-fn render_add_weapon_panel(state: &AppState) -> String {
+fn render_add_weapon_panel(state: &AppState, locale: Locale) -> String {
     let _ = state;
-    "<div class=\"panel\"><h3>Add Weapon</h3><a href=\"/weapon/new\" style=\"display:inline-block; box-sizing:border-box; text-align:center;\">New weapon</a></div>"
-                .to_string()
+    format!(
+        "<div class=\"panel\"><h3>{}</h3><a href=\"/weapon/new\" style=\"display:inline-block; box-sizing:border-box; text-align:center;\">{}</a></div>",
+        t(locale, "weapon.add"),
+        t(locale, "weapon.new_weapon"),
+    )
 }
 
-fn render_weapon_select_options(state: &AppState, selected_id: u32) -> String {
-    let hakushin = load_hakushin_data(state);
+fn render_weapon_select_options(state: &AppState, selected_id: u32, locale: Locale) -> String {
+    let hakushin = load_hakushin_data(state, locale);
     let mut items: Vec<(u32, String)> = hakushin
         .weapons
         .iter()
@@ -341,7 +366,10 @@ fn render_weapon_select_options(state: &AppState, selected_id: u32) -> String {
     items.sort_by(|a, b| a.1.cmp(&b.1));
 
     let mut html = String::new();
-    html.push_str("<option value=\"\" disabled selected>Select weapon</option>");
+    html.push_str(&format!(
+        "<option value=\"\" disabled selected>{}</option>",
+        t(locale, "weapon.select")
+    ));
     for (id, name) in items {
         html.push_str(&format!(
             "<option value=\"{}\"{}>{}</option>",

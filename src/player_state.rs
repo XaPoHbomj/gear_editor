@@ -1,6 +1,7 @@
 use crate::{
     app_state::AppState,
-    stat_label,
+    domain::discs::stat_label,
+    i18n::{Locale, t},
     zon::{read_zon, zon_get_number},
 };
 use std::{
@@ -35,7 +36,12 @@ pub(crate) fn read_next_uid(dir: &FsPath) -> Option<u32> {
     Some(max_id.saturating_add(1).max(1))
 }
 
-pub(crate) fn render_stat_select_options(state: &AppState, keys: &[u32], selected: u32) -> String {
+pub(crate) fn render_stat_select_options(
+    state: &AppState,
+    keys: &[u32],
+    selected: u32,
+    locale: Locale,
+) -> String {
     let mut html = String::new();
     let mut unique = keys.to_vec();
     unique.retain(|key| *key > 0);
@@ -45,7 +51,7 @@ pub(crate) fn render_stat_select_options(state: &AppState, keys: &[u32], selecte
     unique.sort_unstable();
     unique.dedup();
     for key in unique {
-        let label = stat_label(state, key);
+        let label = stat_label(state, locale, key);
         html.push_str(&format!(
             "<option value=\"{}\"{}>{}</option>",
             key,
@@ -61,6 +67,7 @@ pub(crate) fn render_sub_stat_rows(
     sub_props: &[(u32, u32, u32)],
     options: &[u32],
     _main_key: u32,
+    locale: Locale,
 ) -> String {
     let mut rows = String::new();
     for idx in 0..4 {
@@ -71,12 +78,14 @@ pub(crate) fn render_sub_stat_rows(
             }
         }
         rows.push_str(&format!(
-            "<div><label>Key</label><select name=\"sub_key_{}\">{}</select></div>",
+            "<div><label>{}</label><select name=\"sub_key_{}\">{}</select></div>",
+            t(locale, "disc.key"),
             idx + 1,
-            render_stat_select_options(state, options, key)
+            render_stat_select_options(state, options, key, locale)
         ));
         rows.push_str(&format!(
-            "<div><label>Procs</label><input name=\"sub_proc_{}\" type=\"number\" min=\"0\" max=\"6\" value=\"{}\" /></div>",
+            "<div><label>{}</label><input name=\"sub_proc_{}\" type=\"number\" min=\"0\" max=\"6\" value=\"{}\" /></div>",
+            t(locale, "disc.procs"),
             idx + 1,
             add
         ));
@@ -165,13 +174,14 @@ pub(crate) fn render_equip_substat_script(
     script
 }
 
-pub(crate) fn render_slot_options(selected: u32) -> String {
+pub(crate) fn render_slot_options(locale: Locale, selected: u32) -> String {
     let mut html = String::new();
     for slot in 1..=6 {
         html.push_str(&format!(
-            "<option value=\"{}\"{}>Slot {}</option>",
+            "<option value=\"{}\"{}>{} {}</option>",
             slot,
             if slot == selected { " selected" } else { "" },
+            t(locale, "slot"),
             slot
         ));
     }

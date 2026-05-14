@@ -8,6 +8,7 @@ use crate::{
             render_weapon_select,
         },
     },
+    i18n::{Locale, locale_from_headers, t},
     player_state::{parse_slot_value, resolve_item_path, resolve_player_uid},
     utils::svg_data_uri,
     zon::{
@@ -55,9 +56,10 @@ pub(crate) async fn avatar_edit(
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let avatar_path = resolve_item_path(&state.state_dir, uid, "avatar", avatar_id);
+    let locale = locale_from_headers(&headers);
 
     let Some(avatar_zon) = read_zon_verbose(&avatar_path) else {
-        return (StatusCode::NOT_FOUND, Html("Avatar not found")).into_response();
+        return (StatusCode::NOT_FOUND, Html(t(locale, "avatar.not_found"))).into_response();
     };
 
     let level = zon_get_number(&avatar_zon, "level").unwrap_or(1) as u32;
@@ -66,15 +68,15 @@ pub(crate) async fn avatar_edit(
     let unlocked_talent_num =
         zon_get_number(&avatar_zon, "unlocked_talent_num").unwrap_or(0) as u32;
     let cur_weapon_uid = zon_get_number(&avatar_zon, "cur_weapon_uid").unwrap_or(0) as u32;
-    let weapon_options = load_player_weapons(&state, uid);
+    let weapon_options = load_player_weapons(&state, uid, locale);
     let dressed_equip = zon_get_array_numbers(&avatar_zon, "dressed_equip");
-    let equip_options = load_player_equips(&state, uid);
-    let hakushin = load_hakushin_data(&state);
+    let equip_options = load_player_equips(&state, uid, locale);
+    let hakushin = load_hakushin_data(&state, locale);
     let avatar_name = hakushin
         .avatars
         .get(&avatar_id)
         .map(|entry| entry.name.clone())
-        .unwrap_or_else(|| format!("Avatar {avatar_id}"));
+        .unwrap_or_else(|| format!("{} {avatar_id}", t(locale, "fallback.avatar")));
     let avatar_img = hakushin
         .avatars
         .get(&avatar_id)
@@ -90,7 +92,7 @@ pub(crate) async fn avatar_edit(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Edit Character</title>
+        <title>{avatar_edit_title}</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
     .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
@@ -110,36 +112,36 @@ pub(crate) async fn avatar_edit(
         <div class="hero">
             <img src="{avatar_img}" alt="{avatar_name}" />
             <div>
-                <h1>Edit Character {avatar_name}</h1>
-                <div class="meta">ID {avatar_id}</div>
+                <h1>{avatar_edit_title} {avatar_name}</h1>
+                <div class="meta">{id_label} {avatar_id}</div>
             </div>
         </div>
     <form method="post">
       <div class="row">
         <div>
-          <label>Level</label>
+          <label>{level_label}</label>
           <input name="level" type="number" min="1" value="{level}" />
         </div>
         <div>
-                    <label>Mindscapes</label>
+                    <label>{mindscapes_label}</label>
                     <input name="unlocked_talent_num" type="number" min="0" max="6" value="{unlocked_talent_num}" />
         </div>
                 <div>
-                    <label>Weapon</label>
+                    <label>{weapon_label}</label>
                     {weapon_select}
                 </div>
       </div>
-            <h3>Equipped Disks</h3>
+            <h3>{equipped_discs_label}</h3>
             <div class="row">
                 {equip_selects}
             </div>
 
-      <h3>Skill levels</h3>
+      <h3>{skill_levels_label}</h3>
       <div class="row">
         {skills}
       </div>
 
-      <button type="submit">Save (pending)</button>
+      <button type="submit">{save_label}</button>
     </form>
   </div>
 </body>
@@ -149,11 +151,18 @@ pub(crate) async fn avatar_edit(
         avatar_img = html_escape_attr(&avatar_img),
         level = level,
         unlocked_talent_num = unlocked_talent_num,
-        weapon_select = render_weapon_select(cur_weapon_uid, &weapon_options),
-        equip_selects = render_equip_selects(&equip_options, &dressed_equip),
-        skills = render_skill_inputs(&skill_levels, passive_skill_level),
+        weapon_select = render_weapon_select(locale, cur_weapon_uid, &weapon_options),
+        equip_selects = render_equip_selects(locale, &equip_options, &dressed_equip),
+        skills = render_skill_inputs(locale, &skill_levels, passive_skill_level),
+        level_label = t(locale, "avatar.level"),
+        mindscapes_label = t(locale, "avatar.mindscapes"),
+        weapon_label = t(locale, "avatar.weapon"),
+        equipped_discs_label = t(locale, "avatar.equipped_discs"),
+        skill_levels_label = t(locale, "avatar.skill_levels"),
+        save_label = t(locale, "avatar.save"),
+        id_label = t(locale, "avatar.id"),
+        avatar_edit_title = t(locale, "avatar.edit"),
     );
-
     Html(body).into_response()
 }
 
@@ -171,9 +180,10 @@ pub(crate) async fn avatar_update(
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let avatar_path = resolve_item_path(&state.state_dir, uid, "avatar", avatar_id);
+    let locale = locale_from_headers(&headers);
 
     let Some(mut avatar_zon) = read_zon_verbose(&avatar_path) else {
-        return (StatusCode::NOT_FOUND, Html("Avatar not found")).into_response();
+        return (StatusCode::NOT_FOUND, Html(t(locale, "avatar.not_found"))).into_response();
     };
 
     zon_set_number(&mut avatar_zon, "level", payload.level as i64);
@@ -220,10 +230,10 @@ pub(crate) async fn avatar_update(
     Redirect::to("/dashboard?tab=avatars").into_response()
 }
 
-pub(crate) fn render_avatar_cards(state: &AppState, uid: u32) -> String {
+pub(crate) fn render_avatar_cards(state: &AppState, uid: u32, locale: Locale) -> String {
     let avatar_dir = state.state_dir.join(format!("player/{uid}/avatar"));
     let avatar_templates = load_avatar_templates(&state.asset_dir);
-    let hakushin = load_hakushin_data(state);
+    let hakushin = load_hakushin_data(state, locale);
 
     let mut cards = String::new();
     if let Ok(entries) = fs::read_dir(&avatar_dir) {
@@ -269,23 +279,29 @@ pub(crate) fn render_avatar_cards(state: &AppState, uid: u32) -> String {
     format!("<div class=\"cards\">{cards}</div>").to_string()
 }
 
-fn render_skill_inputs(skill_levels: &HashMap<String, u32>, core_ability: u32) -> String {
+fn render_skill_inputs(
+    locale: Locale,
+    skill_levels: &HashMap<String, u32>,
+    core_ability: u32,
+) -> String {
     let mut html = String::new();
-    for (key, label) in [
-        ("common_attack", "Basic attack"),
-        ("special_attack", "Special attack"),
-        ("evade", "Evade"),
-        ("cooperate_skill", "Ultimate"),
-        ("assist_skill", "Assist"),
+    for (key, label_key) in [
+        ("common_attack", "skill.basic_attack"),
+        ("special_attack", "skill.special_attack"),
+        ("evade", "skill.evade"),
+        ("cooperate_skill", "skill.ultimate"),
+        ("assist_skill", "skill.assist"),
     ] {
         let value = skill_levels.get(key).copied().unwrap_or(1);
         html.push_str(&format!(
             "<div><label>{label}</label><input name=\"skill_{key}\" type=\"number\" min=\"1\" value=\"{value}\" /></div>",
+            label = t(locale, label_key),
         ));
     }
 
     html.push_str(&format!(
-        "<div><label>Core ability</label><input name=\"core_ability\" type=\"number\" min=\"0\" max=\"6\" value=\"{core_ability}\" /></div>",
+        "<div><label>{label}</label><input name=\"core_ability\" type=\"number\" min=\"0\" max=\"6\" value=\"{core_ability}\" /></div>",
+        label = t(locale, "avatar.core_ability"),
     ));
 
     html

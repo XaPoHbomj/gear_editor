@@ -1,14 +1,15 @@
-use crate::AppState;
+use crate::{AppState, i18n::Locale};
 use serde_json::Value as JsonValue;
 use std::{
     collections::HashMap,
     fs,
     hash::{Hash, Hasher},
     path::Path as FsPath,
-    sync::{Mutex, OnceLock},
+    sync::Mutex,
 };
 
-static HAKUSHIN_DATA: OnceLock<Mutex<Option<(u64, HakushinData)>>> = OnceLock::new();
+static HAKUSHIN_CACHE: std::sync::LazyLock<Mutex<HashMap<(String, u64), HakushinData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Default, Clone)]
 pub(crate) struct HakushinData {
@@ -46,21 +47,20 @@ pub(crate) fn to_asset_url(path: &str) -> String {
     format!("/assets/{}", path.trim_start_matches('/'))
 }
 
-pub(crate) fn load_hakushin_data(state: &AppState) -> HakushinData {
-    let fingerprint = hakushin_data_fingerprint(&state.dump_dir);
-    let cache = HAKUSHIN_DATA.get_or_init(|| Mutex::new(None));
-    let mut guard = cache.lock().unwrap();
+pub(crate) fn load_hakushin_data(state: &AppState, locale: Locale) -> HakushinData {
+    let lang_dir = state.dump_lang_dir(locale);
+    let fingerprint = hakushin_data_fingerprint(&lang_dir);
+    let cache_key = (locale.code().to_string(), fingerprint);
 
-    if let Some((cached_fingerprint, cached_data)) = guard.as_ref() {
-        if *cached_fingerprint == fingerprint {
-            return cached_data.clone();
-        }
+    let mut cache = HAKUSHIN_CACHE.lock().unwrap();
+    if let Some(cached) = cache.get(&cache_key) {
+        return cached.clone();
     }
 
     let data = HakushinData {
         avatars: load_hakushin_list(
             &state.root_dir,
-            &state.dump_dir.join("characters.json"),
+            &lang_dir.join("characters.json"),
             "name",
             &[
                 "image_local",
@@ -73,25 +73,25 @@ pub(crate) fn load_hakushin_data(state: &AppState) -> HakushinData {
         ),
         weapons: load_hakushin_list(
             &state.root_dir,
-            &state.dump_dir.join("weapons.json"),
+            &lang_dir.join("weapons.json"),
             "name",
             &["icon_local", "icon"],
         ),
         discs: load_hakushin_list(
             &state.root_dir,
-            &state.dump_dir.join("drive_discs.json"),
+            &lang_dir.join("drive_discs.json"),
             "name",
             &["icon_local", "icon"],
         ),
         bangboos: load_hakushin_list(
             &state.root_dir,
-            &state.dump_dir.join("bangboos.json"),
+            &lang_dir.join("bangboos.json"),
             "name",
             &["icon_local", "icon"],
         ),
     };
 
-    *guard = Some((fingerprint, data.clone()));
+    cache.insert(cache_key, data.clone());
     data
 }
 

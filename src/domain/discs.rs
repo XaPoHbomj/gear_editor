@@ -1,95 +1,102 @@
-use crate::AppState;
+use crate::{
+    AppState,
+    i18n::{Locale, t},
+};
 use serde_json::Value as JsonValue;
-use std::{collections::HashMap, fs, sync::OnceLock};
+use std::{collections::HashMap, fs, sync::Mutex};
 
-static STAT_NAMES: OnceLock<HashMap<u32, String>> = OnceLock::new();
+static STAT_NAMES_CACHE: std::sync::LazyLock<Mutex<HashMap<String, HashMap<u32, String>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn load_stat_names(state: &AppState) -> &'static HashMap<u32, String> {
-    STAT_NAMES.get_or_init(|| {
-        let mut map = HashMap::new();
+fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
+    let lang_code = locale.code().to_string();
+    let mut cache = STAT_NAMES_CACHE.lock().unwrap();
+    if let Some(cached) = cache.get(&lang_code) {
+        return cached.clone();
+    }
 
-        let mut weapon_prop = HashMap::new();
-        let weapon_template = state.asset_dir.join("WeaponTemplateTb.json");
-        if let Ok(data) = fs::read_to_string(weapon_template) {
-            if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
-                if let Some(items) = json.get("data").and_then(|v| v.as_array()) {
-                    for item in items {
-                        let Some(item_id) = item.get("item_id").and_then(|v| v.as_u64()) else {
-                            continue;
-                        };
-                        let base_prop = item
-                            .get("base_property")
-                            .and_then(|v| v.get("property"))
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32;
-                        let rand_prop = item
-                            .get("rand_property")
-                            .and_then(|v| v.get("property"))
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32;
-                        weapon_prop.insert(item_id as u32, (base_prop, rand_prop));
+    let lang_dir = state.dump_lang_dir(locale);
+    let mut map = HashMap::new();
+
+    let mut weapon_prop = HashMap::new();
+    let weapon_template = state.asset_dir.join("WeaponTemplateTb.json");
+    if let Ok(data) = fs::read_to_string(weapon_template) {
+        if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
+            if let Some(items) = json.get("data").and_then(|v| v.as_array()) {
+                for item in items {
+                    let Some(item_id) = item.get("item_id").and_then(|v| v.as_u64()) else {
+                        continue;
+                    };
+                    let base_prop = item
+                        .get("base_property")
+                        .and_then(|v| v.get("property"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    let rand_prop = item
+                        .get("rand_property")
+                        .and_then(|v| v.get("property"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    weapon_prop.insert(item_id as u32, (base_prop, rand_prop));
+                }
+            }
+        }
+    }
+
+    let weapon_details = lang_dir.join("weapon_details.json");
+    if let Ok(data) = fs::read_to_string(weapon_details) {
+        if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
+            if let Some(obj) = json.as_object() {
+                for (key, details) in obj {
+                    let Ok(item_id) = key.parse::<u32>() else {
+                        continue;
+                    };
+                    let Some((base_prop, rand_prop)) = weapon_prop.get(&item_id) else {
+                        continue;
+                    };
+                    if let Some(name) = details
+                        .get("base_property")
+                        .and_then(|v| v.get("name"))
+                        .and_then(|v| v.as_str())
+                    {
+                        if *base_prop > 0 {
+                            map.entry(*base_prop).or_insert_with(|| name.to_string());
+                        }
+                    }
+                    if let Some(name) = details
+                        .get("rand_property")
+                        .and_then(|v| v.get("name"))
+                        .and_then(|v| v.as_str())
+                    {
+                        if *rand_prop > 0 {
+                            map.entry(*rand_prop).or_insert_with(|| name.to_string());
+                        }
                     }
                 }
             }
         }
+    }
 
-        let weapon_details = state.dump_dir.join("weapon_details.json");
-        if let Ok(data) = fs::read_to_string(weapon_details) {
-            if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
-                if let Some(obj) = json.as_object() {
-                    for (key, details) in obj {
-                        let Ok(item_id) = key.parse::<u32>() else {
-                            continue;
-                        };
-                        let Some((base_prop, rand_prop)) = weapon_prop.get(&item_id) else {
-                            continue;
-                        };
-                        if let Some(name) = details
-                            .get("base_property")
-                            .and_then(|v| v.get("name"))
-                            .and_then(|v| v.as_str())
-                        {
-                            if *base_prop > 0 {
-                                map.entry(*base_prop).or_insert_with(|| name.to_string());
-                            }
-                        }
-                        if let Some(name) = details
-                            .get("rand_property")
-                            .and_then(|v| v.get("name"))
-                            .and_then(|v| v.as_str())
-                        {
-                            if *rand_prop > 0 {
-                                map.entry(*rand_prop).or_insert_with(|| name.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let bangboo_details = state.dump_dir.join("bangboo_details.json");
-        if let Ok(data) = fs::read_to_string(bangboo_details) {
-            if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
-                if let Some(obj) = json.as_object() {
-                    for (_, details) in obj {
-                        if let Some(ascensions) =
-                            details.get("ascensions").and_then(|v| v.as_object())
-                        {
-                            for (_, stage) in ascensions {
-                                if let Some(extra_props) =
-                                    stage.get("extra_props").and_then(|v| v.as_array())
-                                {
-                                    for prop in extra_props {
-                                        let Some(id) = prop.get("id").and_then(|v| v.as_u64())
-                                        else {
-                                            continue;
-                                        };
-                                        let Some(name) = prop.get("name").and_then(|v| v.as_str())
-                                        else {
-                                            continue;
-                                        };
-                                        map.entry(id as u32).or_insert_with(|| name.to_string());
-                                    }
+    let bangboo_details = lang_dir.join("bangboo_details.json");
+    if let Ok(data) = fs::read_to_string(bangboo_details) {
+        if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
+            if let Some(obj) = json.as_object() {
+                for (_, details) in obj {
+                    if let Some(ascensions) = details.get("ascensions").and_then(|v| v.as_object())
+                    {
+                        for (_, stage) in ascensions {
+                            if let Some(extra_props) =
+                                stage.get("extra_props").and_then(|v| v.as_array())
+                            {
+                                for prop in extra_props {
+                                    let Some(id) = prop.get("id").and_then(|v| v.as_u64()) else {
+                                        continue;
+                                    };
+                                    let Some(name) = prop.get("name").and_then(|v| v.as_str())
+                                    else {
+                                        continue;
+                                    };
+                                    map.entry(id as u32).or_insert_with(|| name.to_string());
                                 }
                             }
                         }
@@ -97,9 +104,10 @@ fn load_stat_names(state: &AppState) -> &'static HashMap<u32, String> {
                 }
             }
         }
+    }
 
-        map
-    })
+    cache.insert(lang_code, map.clone());
+    map
 }
 
 const STAT_HP: u32 = 11103;
@@ -122,28 +130,28 @@ const STAT_ICE_DMG: u32 = 31703;
 const STAT_ELECTRIC_DMG: u32 = 31803;
 const STAT_ETHER_DMG: u32 = 31903;
 
-fn disk_stat_label(key: u32) -> Option<&'static str> {
+fn disk_stat_label(locale: Locale, key: u32) -> String {
     match key {
-        STAT_HP => Some("HP"),
-        STAT_ATK => Some("ATK"),
-        STAT_DEF => Some("DEF"),
-        STAT_HP_PCT => Some("HP%"),
-        STAT_ATK_PCT => Some("ATK%"),
-        STAT_DEF_PCT => Some("DEF%"),
-        STAT_CRIT_RATE => Some("CRIT Rate%"),
-        STAT_CRIT_DMG => Some("CRIT DMG%"),
-        STAT_ANOMALY_PROF => Some("Anomaly Proficiency"),
-        STAT_PEN => Some("PEN"),
-        STAT_PEN_RATIO => Some("PEN Ratio%"),
-        STAT_ANOMALY_MASTERY => Some("Anomaly Mastery%"),
-        STAT_IMPACT => Some("Impact%"),
-        STAT_ENERGY_REGEN => Some("Energy Regen%"),
-        STAT_PHYSICAL_DMG => Some("Physical DMG%"),
-        STAT_FIRE_DMG => Some("Fire DMG%"),
-        STAT_ICE_DMG => Some("Ice DMG%"),
-        STAT_ELECTRIC_DMG => Some("Electric DMG%"),
-        STAT_ETHER_DMG => Some("Ether DMG%"),
-        _ => None,
+        STAT_HP => t(locale, "stat.hp").to_string(),
+        STAT_ATK => t(locale, "stat.atk").to_string(),
+        STAT_DEF => t(locale, "stat.def").to_string(),
+        STAT_HP_PCT => t(locale, "stat.hp_pct").to_string(),
+        STAT_ATK_PCT => t(locale, "stat.atk_pct").to_string(),
+        STAT_DEF_PCT => t(locale, "stat.def_pct").to_string(),
+        STAT_CRIT_RATE => t(locale, "stat.crit_rate").to_string(),
+        STAT_CRIT_DMG => t(locale, "stat.crit_dmg").to_string(),
+        STAT_ANOMALY_PROF => t(locale, "stat.anomaly_prof").to_string(),
+        STAT_PEN => t(locale, "stat.pen").to_string(),
+        STAT_PEN_RATIO => t(locale, "stat.pen_ratio").to_string(),
+        STAT_ANOMALY_MASTERY => t(locale, "stat.anomaly_mastery").to_string(),
+        STAT_IMPACT => t(locale, "stat.impact").to_string(),
+        STAT_ENERGY_REGEN => t(locale, "stat.energy_regen").to_string(),
+        STAT_PHYSICAL_DMG => t(locale, "stat.physical_dmg").to_string(),
+        STAT_FIRE_DMG => t(locale, "stat.fire_dmg").to_string(),
+        STAT_ICE_DMG => t(locale, "stat.ice_dmg").to_string(),
+        STAT_ELECTRIC_DMG => t(locale, "stat.electric_dmg").to_string(),
+        STAT_ETHER_DMG => t(locale, "stat.ether_dmg").to_string(),
+        _ => String::new(),
     }
 }
 
@@ -278,13 +286,14 @@ pub(crate) fn disk_sub_stat_options(main_key: u32) -> Vec<u32> {
     options
 }
 
-pub(crate) fn stat_label(state: &AppState, key: u32) -> String {
-    if let Some(label) = disk_stat_label(key) {
-        return label.to_string();
+pub(crate) fn stat_label(state: &AppState, locale: Locale, key: u32) -> String {
+    let label = disk_stat_label(locale, key);
+    if !label.is_empty() {
+        return label;
     }
-    let names = load_stat_names(state);
+    let names = load_stat_names(state, locale);
     names
         .get(&key)
         .cloned()
-        .unwrap_or_else(|| format!("Stat {key}"))
+        .unwrap_or_else(|| format!("{} {key}", t(locale, "stat.unknown")))
 }

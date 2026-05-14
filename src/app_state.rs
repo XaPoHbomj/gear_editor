@@ -1,3 +1,4 @@
+use crate::i18n::Locale;
 use axum::http::{HeaderMap, header};
 use std::path::PathBuf;
 
@@ -10,6 +11,19 @@ pub(crate) struct AppState {
     pub(crate) prod_asset_dir: PathBuf,
     pub(crate) dump_dir: PathBuf,
     pub(crate) root_dir: PathBuf,
+}
+
+impl AppState {
+    pub(crate) fn dump_lang_dir(&self, locale: Locale) -> PathBuf {
+        let code = match locale {
+            Locale::Ru => "en",
+            Locale::En => "en",
+            Locale::Zh => "zh",
+            Locale::Ko => "ko",
+            Locale::Ja => "ja",
+        };
+        self.dump_dir.join(code)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

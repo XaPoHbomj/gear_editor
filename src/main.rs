@@ -2,7 +2,7 @@ use axum::{
     Router,
     extract::{OriginalUri, Query, State},
     http::{HeaderMap, header},
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Redirect},
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -14,6 +14,7 @@ mod auth;
 mod config;
 mod data;
 mod domain;
+mod i18n;
 mod player_state;
 mod routes;
 mod updates;
@@ -24,7 +25,7 @@ use app_state::{AppState, ServerMode, active_server_mode, state_with_active_serv
 use assets::asset_handler;
 use auth::{get_session, redirect_to_login, sanitize_next_path, url_encode_component};
 use config::{load_sdk_config, resolve_db_path, resolve_sdk_config_path};
-use domain::discs::stat_label;
+use i18n::{Locale, locale_from_headers, t};
 use player_state::resolve_player_uid;
 use routes::auth::{login, login_page, switch_server};
 use routes::avatar::{avatar_edit, avatar_update, render_avatar_cards};
@@ -48,6 +49,12 @@ struct TabQuery {
     lock: Option<u8>,
 }
 
+#[derive(Deserialize)]
+struct SetLangQuery {
+    lang: String,
+    next: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
     let config_path = resolve_sdk_config_path();
@@ -67,7 +74,7 @@ async fn main() {
         .unwrap_or_else(|_| root.join("yoshunko_prod/assets/Filecfg"));
     let dump_dir = env::var("ZZZ_DUMP_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("zzz_dump/latest/en"));
+        .unwrap_or_else(|_| root.join("zzz_dump/latest"));
 
     let state = AppState {
         db_path,
@@ -106,6 +113,7 @@ async fn main() {
         .route("/shiyu/:id/select", post(shiyu_select))
         .route("/da-shiyu", post(da_shiyu_update))
         .route("/apply", post(apply_changes))
+        .route("/set-lang", get(set_language))
         .route("/assets/*path", get(asset_handler))
         .with_state(state);
 
@@ -134,20 +142,22 @@ async fn dashboard(
     let current_mode = active_server_mode(&headers);
     let active_state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&active_state, session.uid);
+    let locale = locale_from_headers(&headers);
 
-    let avatar_cards = render_avatar_cards(&active_state, uid);
-    let weapon_cards = render_weapon_cards(&active_state, uid);
-    let equip_cards = render_equip_cards(&active_state, uid, delete_mode, lock_mode);
-    let bangboo_cards = render_bangboo_cards(&active_state, uid);
+    let avatar_cards = render_avatar_cards(&active_state, uid, locale);
+    let weapon_cards = render_weapon_cards(&active_state, uid, locale);
+    let equip_cards = render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale);
+    let bangboo_cards = render_bangboo_cards(&active_state, uid, locale);
     let server_host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("localhost:18080");
-    let updates_panel = render_client_updates_panel(&state, server_host);
-    let da_panel = render_da_panel(&active_state, uid);
-    let shiyu_panel = render_shiyu_panel(&active_state, uid);
+    let updates_panel = render_client_updates_panel(&state, server_host, locale);
+    let da_panel = render_da_panel(&active_state, uid, locale);
+    let shiyu_panel = render_shiyu_panel(&active_state, uid, locale);
 
     let pending_count = session.pending_writes.len();
+    let locale = locale_from_headers(&headers);
     let next = sanitize_next_path(
         original_uri
             .0
@@ -165,9 +175,26 @@ async fn dashboard(
         url_encode_component(&next)
     );
 
+    let encoded_next = url_encode_component(&next);
+    let mut lang_opts = String::new();
+    for lang in Locale::all() {
+        let selected = if locale == *lang { " selected" } else { "" };
+        lang_opts.push_str(&format!(
+            "<option value=\"{code}\"{selected}>{label}</option>",
+            code = lang.code(),
+            label = lang.label(),
+            selected = selected,
+        ));
+    }
+    let lang_selector = format!(
+        "<select onchange=\"location.href='/set-lang?lang='+this.value+'&next={next}'\" style=\"padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px; font-weight:700; cursor:pointer;\">{opts}</select>",
+        next = encoded_next,
+        opts = lang_opts,
+    );
+
     let body = format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang_attr}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -215,6 +242,7 @@ async fn dashboard(
         .mobile-drawer {{ display: none; }}
     @media (max-width: 768px) {{
         header {{ padding: 12px 14px; }}
+        .lang-select {{ display: none; }}
         .menu-button {{ display: inline-flex; flex: 0 0 auto; }}
         .desktop-tabs {{ display: none; }}
         .container {{ padding: 14px; }}
@@ -239,33 +267,42 @@ async fn dashboard(
         <span></span>
     </button>
     <div class="desktop-tabs tabs">
-        <a class="{tab_avatar}" href="/dashboard?tab=avatars">Characters</a>
-        <a class="{tab_weapon}" href="/dashboard?tab=weapons">Weapons</a>
-        <a class="{tab_equip}" href="/dashboard?tab=discs">Discs</a>
-        <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">Bangboos</a>
-        <a class="{tab_da}" href="/dashboard?tab=da">Deadly Assault</a>
-        <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">Shiyu</a>
-        <a class="{tab_updates}" href="/dashboard?tab=updates">Client Updates</a>
+        <a class="{tab_avatar}" href="/dashboard?tab=avatars">{nav_characters}</a>
+        <a class="{tab_weapon}" href="/dashboard?tab=weapons">{nav_weapons}</a>
+        <a class="{tab_equip}" href="/dashboard?tab=discs">{nav_discs}</a>
+        <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
+        <a class="{tab_da}" href="/dashboard?tab=da">{nav_deadly_assault}</a>
+        <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">{nav_shiyu}</a>
+        <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
     </div>
     <div class="desktop-actions" style="display:flex; align-items:center; gap:10px;">
-        <div class="meta">Signed in as {username}</div>
-        <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
-        <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
+        <div class="meta">{signed_in_as} {username}</div>
+        <div class="lang-select">{lang_selector}</div>
+        <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta}</a>
+        <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod}</a>
         <form method="post" action="/apply" style="margin:0;">
             <input type="hidden" name="session" value="{session_id}" />
-            <button class="apply" type="submit">Apply changes ({pending_count})</button>
+            <button class="apply" type="submit">{apply_changes} ({pending_count})</button>
         </form>
     </div>
 </header>
 <div class="mobile-overlay" onclick="this.classList.remove('open'); document.querySelector('.mobile-drawer').classList.remove('open');"></div>
 <aside class="mobile-drawer tabs" aria-hidden="true">
-    <a class="{tab_avatar}" href="/dashboard?tab=avatars">Characters</a>
-    <a class="{tab_weapon}" href="/dashboard?tab=weapons">Weapons</a>
-    <a class="{tab_equip}" href="/dashboard?tab=discs">Discs</a>
-    <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">Bangboos</a>
-    <a class="{tab_da}" href="/dashboard?tab=da">Deadly Assault</a>
-    <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">Shiyu</a>
-    <a class="{tab_updates}" href="/dashboard?tab=updates">Client Updates</a>
+    <a class="{tab_avatar}" href="/dashboard?tab=avatars">{nav_characters}</a>
+    <a class="{tab_weapon}" href="/dashboard?tab=weapons">{nav_weapons}</a>
+    <a class="{tab_equip}" href="/dashboard?tab=discs">{nav_discs}</a>
+    <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
+    <a class="{tab_da}" href="/dashboard?tab=da">{nav_deadly_assault}</a>
+    <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">{nav_shiyu}</a>
+    <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
+    <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px;">
+        <div class="meta">{signed_in_as} {username}</div>
+        {lang_selector}
+        <div style="display:flex; gap:4px;">
+            <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
+            <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
+        </div>
+    </div>
 </aside>
 <main class="content">
 <div class="container">
@@ -295,6 +332,19 @@ async fn dashboard(
         pending_count = pending_count,
         switch_beta_href = switch_beta_href,
         switch_prod_href = switch_prod_href,
+        lang_selector = lang_selector,
+        lang_attr = locale.lang_attr(),
+        nav_characters = t(locale, "nav.characters"),
+        nav_weapons = t(locale, "nav.weapons"),
+        nav_discs = t(locale, "nav.discs"),
+        nav_bangboos = t(locale, "nav.bangboos"),
+        nav_deadly_assault = t(locale, "nav.deadly_assault"),
+        nav_shiyu = t(locale, "nav.shiyu"),
+        nav_client_updates = t(locale, "nav.client_updates"),
+        signed_in_as = t(locale, "header.signed_in_as"),
+        apply_changes = t(locale, "header.apply_changes"),
+        header_beta = t(locale, "header.beta"),
+        header_prod = t(locale, "header.prod"),
         beta_active = if current_mode == ServerMode::Beta {
             "background:#4c7dff;color:#fff;"
         } else {
@@ -308,4 +358,25 @@ async fn dashboard(
     );
 
     Html(body).into_response()
+}
+
+async fn set_language(
+    _headers: HeaderMap,
+    Query(params): Query<SetLangQuery>,
+) -> impl IntoResponse {
+    let locale = params.lang.trim().parse::<Locale>().unwrap_or(Locale::En);
+    let next = params
+        .next
+        .as_deref()
+        .and_then(sanitize_next_path)
+        .unwrap_or_else(|| "/dashboard".to_string());
+
+    let mut response = Redirect::to(&next).into_response();
+    let header_value = format!("gear_lang={}; Path=/; SameSite=Lax", locale.code())
+        .parse()
+        .unwrap();
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, header_value);
+    response
 }
