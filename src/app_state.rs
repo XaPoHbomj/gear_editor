@@ -16,7 +16,7 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn dump_lang_dir(&self, locale: Locale) -> PathBuf {
         let code = match locale {
-            Locale::Ru => "en",
+            Locale::Ru => "ru",
             Locale::En => "en",
             Locale::Zh => "zh",
             Locale::Ko => "ko",
