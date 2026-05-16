@@ -16,7 +16,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use serde::Deserialize;
-use std::fs;
+use std::{collections::HashMap, fs};
 
 #[derive(Deserialize)]
 pub(crate) struct WeaponUpdateForm {
@@ -173,6 +173,22 @@ pub(crate) async fn weapon_new(
     let locale = locale_from_headers(&headers);
     let options = render_weapon_select_options(&state, 0, locale);
 
+    let hakushin = load_hakushin_data(&state, locale);
+    let weapon_images: HashMap<u32, String> = hakushin
+        .weapons
+        .iter()
+        .map(|(id, entry)| {
+            let url = entry
+                .image_local
+                .as_deref()
+                .map(to_asset_url)
+                .unwrap_or_else(|| svg_data_uri(&entry.name));
+            (*id, url)
+        })
+        .collect();
+    let weapon_images_json =
+        serde_json::to_string(&weapon_images).unwrap_or_else(|_| "{}".to_string());
+
     let body = format!(
         r#"<!doctype html>
 <html lang="{lang}">
@@ -193,6 +209,8 @@ pub(crate) async fn weapon_new(
             .row {{ grid-template-columns: 1fr; }}
             button {{ width: 100%; }}
         }}
+        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 auto 8px; }}
+        @media (max-width: 768px) {{ .preview-img {{ width: 100%; }} }}
     </style>
 </head>
 <body>
@@ -200,8 +218,9 @@ pub(crate) async fn weapon_new(
         <h1>{new_title}</h1>
         <form method="post">
             <div>
+                <img id="weapon_preview" class="preview-img" />
                 <label>{weapon_label}</label>
-                <select name="weapon_id" required>
+                <select name="weapon_id" id="weapon_id" required>
                     {options}
                 </select>
             </div>
@@ -214,9 +233,20 @@ pub(crate) async fn weapon_new(
             <button type="submit">{create_label}</button>
         </form>
     </div>
+    <script>
+    var w = {weapon_images_json};
+    var p = document.getElementById("weapon_preview");
+    var s = document.getElementById("weapon_id");
+    s.addEventListener("change", function() {{
+        var u = w[s.value];
+        if (u) {{ p.src = u; p.style.display = "block"; }}
+        else {{ p.style.display = "none"; }}
+    }});
+    </script>
 </body>
 </html>"#,
         options = options,
+        weapon_images_json = weapon_images_json,
         new_title = t(locale, "weapon.new"),
         weapon_label = t(locale, "avatar.weapon"),
         refine_label = t(locale, "weapon.refine_level"),

@@ -340,6 +340,21 @@ pub(crate) async fn equip_new(
     let locale = locale_from_headers(&headers);
 
     let options = render_disc_select_options(&state, 0, locale);
+    let disc_images: HashMap<u32, String> = {
+        let h = load_hakushin_data(&state, locale);
+        h.discs
+            .iter()
+            .map(|(id, entry)| {
+                let url = entry
+                    .image_local
+                    .as_deref()
+                    .map(to_asset_url)
+                    .unwrap_or_else(|| svg_data_uri(&entry.name));
+                (*id, url)
+            })
+            .collect()
+    };
+    let disc_images_json = serde_json::to_string(&disc_images).unwrap_or_else(|_| "{}".to_string());
     let slot_options = render_slot_options(locale, 1);
     let main_options = render_stat_select_options(&state, &disk_main_stat_options(1), 0, locale);
     let sub_options = disk_sub_stat_options(0);
@@ -398,10 +413,12 @@ pub(crate) async fn equip_new(
         button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
         .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
         .row > * {{ min-width: 0; }}
+        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 auto 8px; }}
         @media (max-width: 768px) {{
             .container {{ padding: 14px; }}
             .row {{ grid-template-columns: 1fr; }}
             button {{ width: 100%; }}
+            .preview-img {{ width: 100%; }}
         }}
     </style>
 </head>
@@ -410,8 +427,9 @@ pub(crate) async fn equip_new(
         <h1>{new_title}</h1>
         <form method="post">
             <div>
+                <img id="disc_preview" class="preview-img" />
                 <label>{disc_set_label}</label>
-                <select name="equip_set_id" required>
+                <select name="equip_set_id" id="equip_set_id" required>
                     {options}
                 </select>
             </div>
@@ -442,6 +460,16 @@ pub(crate) async fn equip_new(
             <button>{create_label}</button>
         </form>
     </div>
+    <script>
+    var d = {disc_images_json};
+    var p = document.getElementById("disc_preview");
+    var s = document.getElementById("equip_set_id");
+    s.addEventListener("change", function() {{
+        var u = d[s.value];
+        if (u) {{ p.src = u; p.style.display = "block"; }}
+        else {{ p.style.display = "none"; }}
+    }});
+    </script>
 </body>
 </html>"#,
         options = options,
@@ -449,6 +477,7 @@ pub(crate) async fn equip_new(
         main_options = main_options,
         sub_stat_rows = sub_stat_rows,
         script = script,
+        disc_images_json = disc_images_json,
         new_title = new_title,
         disc_set_label = disc_set_label,
         slot_label = slot_label,
@@ -610,6 +639,21 @@ pub(crate) async fn equip_generate(
     let locale = locale_from_headers(&headers);
 
     let options = render_disc_select_options(&state, 0, locale);
+    let disc_images: HashMap<u32, String> = {
+        let h = load_hakushin_data(&state, locale);
+        h.discs
+            .iter()
+            .map(|(id, entry)| {
+                let url = entry
+                    .image_local
+                    .as_deref()
+                    .map(to_asset_url)
+                    .unwrap_or_else(|| svg_data_uri(&entry.name));
+                (*id, url)
+            })
+            .collect()
+    };
+    let disc_images_json = serde_json::to_string(&disc_images).unwrap_or_else(|_| "{}".to_string());
     let gen_title = t(locale, "disc.generate");
     let gen_desc = t(locale, "disc.generate_desc");
     let disc_set_label = t(locale, "disc.set");
@@ -634,6 +678,8 @@ pub(crate) async fn equip_generate(
         .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
         .row > * {{ min-width: 0; }}
         .meta {{ color: #9aa4b2; font-size: 12px; }}
+        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 auto 8px; }}
+        @media (max-width: 768px) {{ .preview-img {{ width: 100%; }} }}
     </style>
 </head>
 <body>
@@ -642,8 +688,9 @@ pub(crate) async fn equip_generate(
         <div class="meta">{gen_desc}</div>
         <form method="post">
             <div>
+                <img id="disc_preview" class="preview-img" />
                 <label>{disc_set_label}</label>
-                <select name="equip_set_id" required>
+                <select name="equip_set_id" id="equip_set_id" required>
                     {options}
                 </select>
             </div>
@@ -662,12 +709,23 @@ pub(crate) async fn equip_generate(
             <button>{gen_btn}</button>
         </form>
     </div>
+    <script>
+    var d = {disc_images_json};
+    var p = document.getElementById("disc_preview");
+    var s = document.getElementById("equip_set_id");
+    s.addEventListener("change", function() {{
+        var u = d[s.value];
+        if (u) {{ p.src = u; p.style.display = "block"; }}
+        else {{ p.style.display = "none"; }}
+    }});
+    </script>
 </body>
 </html>"#,
         options = options,
         slot_options = slot_options,
         gen_title = gen_title,
         gen_desc = gen_desc,
+        disc_images_json = disc_images_json,
         disc_set_label = disc_set_label,
         slot_label = slot_label,
         count_label = count_label,
