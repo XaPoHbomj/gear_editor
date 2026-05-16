@@ -258,8 +258,9 @@ async fn dashboard(
         .mobile-overlay.open {{ display: block; }}
         .mobile-drawer {{ display: block; position: fixed; top: 0; left: 0; bottom: 0; width: min(82vw, 320px); background: #151a24; border-right: 1px solid #232a38; padding: 16px; box-sizing: border-box; overflow-y: auto; transform: translateX(-100%); transition: transform 0.2s ease; z-index: 31; }}
         .mobile-drawer.open {{ transform: translateX(0); }}
-        .mobile-drawer.tabs {{ display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; }}
+        .mobile-drawer.tabs {{ display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; }}
         .mobile-drawer.tabs a {{ display: block; width: 100%; box-sizing: border-box; white-space: normal; line-height: 1.25; }}
+        .mobile-drawer select {{ width: 100%; }}
     }}
   </style>
 </head>
@@ -297,12 +298,12 @@ async fn dashboard(
     <a class="{tab_da}" href="/dashboard?tab=da">{nav_deadly_assault}</a>
     <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">{nav_shiyu}</a>
     <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
-    <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px;">
+    <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px; width:100%; box-sizing:border-box;">
         <div class="meta">{signed_in_as} {username}</div>
         {lang_selector}
-        <div style="display:flex; gap:4px;">
-            <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
-            <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
+        <div style="display:flex; gap:4px; width:100%;">
+            <a href="{switch_beta_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
+            <a href="{switch_prod_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
         </div>
     </div>
 </aside>
