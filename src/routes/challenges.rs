@@ -38,6 +38,7 @@ pub(crate) async fn da_shiyu_update(
         return redirect_to_login(&original_uri.0);
     };
 
+    let locale = locale_from_headers(&headers);
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let hadal_path = state
@@ -45,7 +46,7 @@ pub(crate) async fn da_shiyu_update(
         .join(format!("player/{uid}/hadal_zone/info"));
 
     let Some(mut hadal_zon) = read_zon_verbose(&hadal_path) else {
-        return (StatusCode::NOT_FOUND, Html("Hadal zone info not found")).into_response();
+        return (StatusCode::NOT_FOUND, Html(t(locale, "common.hadal_zone_not_found"))).into_response();
     };
 
     zon_set_entrance_zone_id(&mut hadal_zon, 1, payload.shiyu_zone_id);
@@ -108,10 +109,10 @@ fn format_with_commas(value: i64) -> String {
     formatted
 }
 
-fn format_stat_value(value: Option<f64>) -> String {
+fn format_stat_value(value: Option<f64>, locale: Locale) -> String {
     value
         .map(|v| format_with_commas(v.round() as i64))
-        .unwrap_or_else(|| "N/A".to_string())
+        .unwrap_or_else(|| t(locale, "common.na").to_string())
 }
 
 fn clean_rich_text(text: &str) -> String {
@@ -251,7 +252,7 @@ fn shiyu_floor_boss_names(zones: &[(u32, JsonValue)]) -> Vec<String> {
                 let name = monster
                     .get("name")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown");
+                    .unwrap_or_else(|| "Unknown");
                 let hp = monster
                     .get("stats")
                     .and_then(|s| s.get("hp"))
@@ -278,7 +279,7 @@ fn shiyu_render_monster_card(
     let boss_name = monster
         .get("name")
         .and_then(|n| n.as_str())
-        .unwrap_or("Unknown");
+        .unwrap_or_else(|| t(locale, "common.unknown"));
     let boss_image = monster
         .get("image")
         .and_then(|img| img.as_str())
@@ -307,10 +308,10 @@ fn shiyu_render_monster_card(
         .unwrap_or(&empty_map);
     let weakness = weakness.unwrap_or(&empty_map);
 
-    let hp = format_stat_value(stats.get("hp").and_then(|h| h.as_f64()));
-    let atk = format_stat_value(stats.get("attack").and_then(|a| a.as_f64()));
-    let def = format_stat_value(stats.get("defence").and_then(|d| d.as_f64()));
-    let stun = format_stat_value(stats.get("stun").and_then(|st| st.as_f64()));
+    let hp = format_stat_value(stats.get("hp").and_then(|h| h.as_f64()), locale);
+    let atk = format_stat_value(stats.get("attack").and_then(|a| a.as_f64()), locale);
+    let def = format_stat_value(stats.get("defence").and_then(|d| d.as_f64()), locale);
+    let stun = format_stat_value(stats.get("stun").and_then(|st| st.as_f64()), locale);
 
     let weakness_badges: Vec<String> = weakness
         .iter()
@@ -359,10 +360,10 @@ fn shiyu_render_monster_card(
             <div style="flex: 1 1 260px; min-width: 220px;">
                 <h4 style="margin: 0 0 10px 0; font-size: 16px;">{boss_name}</h4>
                 <div style="font-size: 13px; color: #c7d1e0; line-height: 1.45;">
-                    <div style="margin-bottom: 5px;"><strong>HP:</strong> {hp}</div>
-                    <div style="margin-bottom: 5px;"><strong>ATK:</strong> {atk}</div>
-                    <div style="margin-bottom: 5px;"><strong>DEF:</strong> {def}</div>
-                    <div style="margin-bottom: 5px;"><strong>Stun:</strong> {stun}</div>
+                    <div style="margin-bottom: 5px;"><strong>{hp_label}:</strong> {hp}</div>
+                    <div style="margin-bottom: 5px;"><strong>{atk_label}:</strong> {atk}</div>
+                    <div style="margin-bottom: 5px;"><strong>{def_label}:</strong> {def}</div>
+                    <div style="margin-bottom: 5px;"><strong>{stun_label}:</strong> {stun}</div>
                     {weakness_html}
                     {resistance_html}
                 </div>
@@ -374,18 +375,22 @@ fn shiyu_render_monster_card(
         atk = atk,
         def = def,
         stun = stun,
+        hp_label = t(locale, "stat.hp"),
+        atk_label = t(locale, "stat.atk"),
+        def_label = t(locale, "stat.def"),
+        stun_label = t(locale, "stat.stun"),
         weakness_html = if !weakness_str.is_empty() {
             format!(
-                "<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:6px;\"><strong>Weakness:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>",
-                weakness_str
+                "<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:6px;\"><strong>{weakness_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>",
+                weakness_str, weakness_label = t(locale, "stat.weakness"),
             )
         } else {
             String::new()
         },
         resistance_html = if !resistance_str.is_empty() {
             format!(
-                "<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>Resistance:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>",
-                resistance_str
+                "<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>{resistance_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>",
+                resistance_str, resistance_label = t(locale, "stat.resistance"),
             )
         } else {
             String::new()
@@ -454,7 +459,7 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
                     let name = details
                         .get("name")
                         .and_then(|n| n.as_str())
-                        .unwrap_or("Unknown");
+                        .unwrap_or_else(|| t(locale, "common.unknown"));
 
                     let mut boss_names = Vec::new();
                     if let Some(zones) = details.get("zone").and_then(|z| z.as_object()) {
@@ -523,15 +528,16 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
                 cards.push_str(&format!(
                     r#"<a href="/da/{id}" class="card" {style}>
                         <h3>{name}{selected_mark}</h3>
-                        <div class="meta">ID: {id}<br>{boss_list}</div>
-                    </a>"#
+                        <div class="meta">{id_label}: {id}<br>{boss_list}</div>
+                    </a>"#,
+                    id_label = t(locale, "common.id"),
                 ));
             }
         }
     }
 
     if cards.is_empty() {
-        cards.push_str("<p class=\"meta\">No Deadly Assault data available.</p>");
+        cards.push_str("<p class=\"meta\">{no_data}</p>");
     }
 
     format!("<div class=\"cards\">{cards}</div>")
@@ -592,7 +598,7 @@ pub(crate) fn render_shiyu_panel(state: &AppState, uid: u32, locale: Locale) -> 
                     let name = details
                         .get("name")
                         .and_then(|n| n.as_str())
-                        .unwrap_or("Unknown");
+                        .unwrap_or_else(|| t(locale, "common.unknown"));
 
                     let max_stage = shiyu_max_stage(details);
                     let last_floor_zones = shiyu_stage_zones(details, max_stage);
@@ -632,15 +638,16 @@ pub(crate) fn render_shiyu_panel(state: &AppState, uid: u32, locale: Locale) -> 
                 cards.push_str(&format!(
                     r#"<a href="/shiyu/{id}" class="card" {style}>
                         <h3>{name}{selected_mark}</h3>
-                        <div class="meta">ID: {id}<br>{boss_list}</div>
-                    </a>"#
+                        <div class="meta">{id_label}: {id}<br>{boss_list}</div>
+                    </a>"#,
+                    id_label = t(locale, "common.id"),
                 ));
             }
         }
     }
 
     if cards.is_empty() {
-        cards.push_str("<p class=\"meta\">No Shiyu data available.</p>");
+        cards.push_str("<p class=\"meta\">{no_data}</p>");
     }
 
     format!("<div class=\"cards\">{cards}</div>")
@@ -661,7 +668,7 @@ pub(crate) async fn da_detail(
                 let da_name = da_data
                     .get("name")
                     .and_then(|n| n.as_str())
-                    .unwrap_or("Unknown");
+                    .unwrap_or_else(|| t(locale, "common.unknown"));
 
                 let mut buff_cards = String::new();
                 let mut boss_cards = String::new();
@@ -701,9 +708,10 @@ pub(crate) async fn da_detail(
                         } else {
                             format!(
                                 r#"<div style="margin-top: 10px;">
-                                    <div style="font-size: 12px; font-weight: 700; color: #8fb0ff; margin-bottom: 2px;">Layer Buffs</div>
+                                    <div style="font-size: 12px; font-weight: 700; color: #8fb0ff; margin-bottom: 2px;">{}</div>
                                     {}
                                 </div>"#,
+                                t(locale, "da.layer_buffs"),
                                 layer_buffs_html
                             )
                         };
@@ -718,7 +726,7 @@ pub(crate) async fn da_detail(
                                 let boss_name = monster
                                     .get("name")
                                     .and_then(|n| n.as_str())
-                                    .unwrap_or("Unknown");
+                                    .unwrap_or_else(|| t(locale, "common.unknown"));
 
                                 let boss_image = monster
                                     .get("image")
@@ -757,12 +765,12 @@ pub(crate) async fn da_detail(
                                 let hp = format_with_commas(da_total_hp_from_base(base_hp_value));
                                 let base_hp = format_with_commas(base_hp_value.round() as i64);
                                 let atk =
-                                    format_stat_value(stats.get("attack").and_then(|a| a.as_f64()));
+                                    format_stat_value(stats.get("attack").and_then(|a| a.as_f64()), locale);
                                 let def = format_stat_value(
-                                    stats.get("defence").and_then(|d| d.as_f64()),
+                                    stats.get("defence").and_then(|d| d.as_f64()), locale,
                                 );
                                 let stun =
-                                    format_stat_value(stats.get("stun").and_then(|st| st.as_f64()));
+                                    format_stat_value(stats.get("stun").and_then(|st| st.as_f64()), locale);
 
                                 // Correct field mapping: element == 1 means weakness, element == -1 means resistance.
                                 let weakness_badges: Vec<String> = element
@@ -812,11 +820,11 @@ pub(crate) async fn da_detail(
                                         <div style="flex: 1 1 260px; min-width: 240px;">
                                             <h3>{boss_name}</h3>
                                             <div style="margin-top: 12px; font-size: 13px; color: #c7d1e0; line-height: 1.45;">
-                                                <div style="margin-bottom: 6px;"><strong>HP:</strong> {hp}</div>
-                                                <div style="margin-bottom: 6px;"><strong>Base HP:</strong> {base_hp}</div>
-                                                <div style="margin-bottom: 6px;"><strong>ATK:</strong> {atk}</div>
-                                                <div style="margin-bottom: 6px;"><strong>DEF:</strong> {def}</div>
-                                                <div style="margin-bottom: 6px;"><strong>Stun:</strong> {stun}</div>
+                                                <div style="margin-bottom: 6px;"><strong>{hp_label}:</strong> {hp}</div>
+                                                <div style="margin-bottom: 6px;"><strong>{base_hp_label}:</strong> {base_hp}</div>
+                                                <div style="margin-bottom: 6px;"><strong>{atk_label}:</strong> {atk}</div>
+                                                <div style="margin-bottom: 6px;"><strong>{def_label}:</strong> {def}</div>
+                                                <div style="margin-bottom: 6px;"><strong>{stun_label}:</strong> {stun}</div>
                                                 {weakness_html}
                                                 {resistance_html}
                                                 {layer_buffs_section}
@@ -824,13 +832,24 @@ pub(crate) async fn da_detail(
                                         </div>
                                         {image_html}
                                     </div>"#,
+                                                                        boss_name = boss_name,
+                                    hp = hp,
+                                    base_hp = base_hp,
+                                    atk = atk,
+                                    def = def,
+                                    stun = stun,
+                                    hp_label = t(locale, "stat.hp"),
+                                    base_hp_label = t(locale, "stat.base_hp"),
+                                    atk_label = t(locale, "stat.atk"),
+                                    def_label = t(locale, "stat.def"),
+                                    stun_label = t(locale, "stat.stun"),
                                     weakness_html = if !weakness_str.is_empty() {
-                                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:6px;\"><strong>Weakness:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", weakness_str)
+                                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:6px;\"><strong>{weakness_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", weakness_str, weakness_label = t(locale, "stat.weakness"))
                                     } else {
                                         String::new()
                                     },
                                     resistance_html = if !resistance.is_empty() {
-                                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>Resistance:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", resistance)
+                                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>{resistance_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", resistance, resistance_label = t(locale, "stat.resistance"))
                                     } else {
                                         String::new()
                                     },
@@ -844,12 +863,12 @@ pub(crate) async fn da_detail(
                             let mut buffs_html = String::new();
                             for (_, buff) in selectable_buffs.iter().take(3) {
                                 let buff_title =
-                                    buff.get("title").and_then(|t| t.as_str()).unwrap_or("Buff");
+                                    buff.get("title").and_then(|t| t.as_str()).unwrap_or_else(|| t(locale, "common.buff"));
 
                                 let buff_desc = buff
                                     .get("desc")
                                     .and_then(|d| d.as_str())
-                                    .unwrap_or("No description");
+                                    .unwrap_or_else(|| t(locale, "common.no_description"));
 
                                 // Remove color tags from description for better readability
                                 let clean_desc = clean_rich_text(buff_desc);
@@ -858,7 +877,7 @@ pub(crate) async fn da_detail(
                                     continue;
                                 }
                                 let display_title = if buff_title.trim().is_empty() {
-                                    "Buff"
+                                    t(locale, "common.buff")
                                 } else {
                                     buff_title
                                 };
@@ -875,9 +894,10 @@ pub(crate) async fn da_detail(
                             if !buffs_html.is_empty() {
                                 buff_cards.push_str(&format!(
                                     r#"<div class="card" style="background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; grid-column: span 1;">
-                                        <h3>Selectable Buffs</h3>
+                                        <h3>{}</h3>
                                         {}
                                     </div>"#,
+                                    t(locale, "da.selectable_buffs"),
                                     buffs_html
                                 ));
                             }
@@ -891,7 +911,7 @@ pub(crate) async fn da_detail(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{} - Gear Editor</title>
+  <title>{da_name} - Gear Editor</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; }}
@@ -921,23 +941,23 @@ pub(crate) async fn da_detail(
 </head>
 <body>
 <header>
-  <a href="/dashboard?tab=da" class="back">← Back to DA</a>
-    <form method="post" action="/da/{}/select" style="margin: 0;">
+  <a href="/dashboard?tab=da" class="back">{2}</a>
+    <form method="post" action="/da/{1}/select" style="margin: 0;">
         <button type="submit" style="padding: 10px 18px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
-            Select this Deadly Assault
+            {3}
         </button>
     </form>
 </header>
 <div class="container">
-  <h1>{} #{}</h1>
+  <h1>{0} {4} {1}</h1>
   <div class="cards">
-    {}
-    {}
+    {5}
+    {6}
   </div>
 </div>
 </body>
 </html>"#,
-                    da_name, id, da_name, id, buff_cards, boss_cards
+                da_name, id, t(locale, "da.back"), t(locale, "da.select"), t(locale, "common.id"), buff_cards, boss_cards
                 );
 
                 return Html(html).into_response();
@@ -945,7 +965,7 @@ pub(crate) async fn da_detail(
         }
     }
 
-    Html("<html><body><h1>DA not found</h1></body></html>".to_string()).into_response()
+    Html(t(locale, "da.not_found").to_string()).into_response()
 }
 
 pub(crate) async fn shiyu_detail(
@@ -964,7 +984,7 @@ pub(crate) async fn shiyu_detail(
                 let shiyu_name = shiyu_data
                     .get("name")
                     .and_then(|n| n.as_str())
-                    .unwrap_or("Unknown");
+                    .unwrap_or_else(|| t(locale, "common.unknown"));
                 let max_stage = shiyu_max_stage(shiyu_data);
                 let selected_floor = query.floor.unwrap_or(max_stage).clamp(1, max_stage);
                 let floor_zones = shiyu_stage_zones(shiyu_data, selected_floor);
@@ -980,8 +1000,8 @@ pub(crate) async fn shiyu_detail(
                             r#"display:inline-flex; align-items:center; justify-content:center; min-width: 48px; padding: 8px 12px; border-radius: 10px; border: 1px solid #2a3140; text-decoration: none; font-weight: 600; color: #d5dbea; background: #121620;"#
                         };
                         format!(
-                            r#"<a href="{}" style="{}">Floor {}</a>"#,
-                            href, style, floor
+                            r#"<a href="{}" style="{}">{} {}</a>"#,
+                            href, style, t(locale, "shiyu.floor"), floor
                         )
                     })
                     .collect::<Vec<_>>()
@@ -1009,18 +1029,18 @@ pub(crate) async fn shiyu_detail(
                         let mut buffs_html = String::new();
                         for (_, buff) in selectable_buffs.iter() {
                             let buff_title =
-                                buff.get("title").and_then(|t| t.as_str()).unwrap_or("Buff");
+                                buff.get("title").and_then(|t| t.as_str()).unwrap_or_else(|| t(locale, "common.buff"));
                             let buff_desc = buff
                                 .get("desc")
                                 .and_then(|d| d.as_str())
-                                .unwrap_or("No description");
+                                .unwrap_or_else(|| t(locale, "common.no_description"));
                             let clean_desc = clean_rich_text(buff_desc);
                             let rich_desc = render_rich_text(buff_desc);
                             if buff_title.trim().is_empty() && clean_desc.is_empty() {
                                 continue;
                             }
                             let display_title = if buff_title.trim().is_empty() {
-                                "Buff"
+                                t(locale, "common.buff")
                             } else {
                                 buff_title
                             };
@@ -1037,9 +1057,10 @@ pub(crate) async fn shiyu_detail(
                         if !buffs_html.is_empty() {
                             buff_cards = format!(
                                 r#"<div class="card" style="background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38;">
-                                <h3>Buffs</h3>
+                                <h3>{}</h3>
                                 {}
                             </div>"#,
+                                t(locale, "shiyu.buffs"),
                                 buffs_html
                             );
                         }
@@ -1076,7 +1097,7 @@ pub(crate) async fn shiyu_detail(
                                 .filter(|s| !s.is_empty())
                                 .map(|s| s.to_string())
                         })
-                        .unwrap_or_else(|| format!("Fight {fight_index}"));
+                        .unwrap_or_else(|| format!("{} {}", t(locale, "shiyu.fight"), fight_index));
                     let waves_num = room.get("waves_num").and_then(|v| v.as_u64()).unwrap_or(0);
                     let room_weakness = room.get("monster_weakness").and_then(|w| w.as_object());
 
@@ -1117,7 +1138,7 @@ pub(crate) async fn shiyu_detail(
                         let mut html = String::new();
                         for (_, buff) in buffs.iter() {
                             let buff_title =
-                                buff.get("title").and_then(|v| v.as_str()).unwrap_or("Buff");
+                                buff.get("title").and_then(|v| v.as_str()).unwrap_or_else(|| t(locale, "common.buff"));
                             let buff_desc = buff.get("desc").and_then(|v| v.as_str()).unwrap_or("");
                             let clean_desc = clean_rich_text(buff_desc);
                             let rich_desc = render_rich_text(buff_desc);
@@ -1125,7 +1146,7 @@ pub(crate) async fn shiyu_detail(
                                 continue;
                             }
                             let display_title = if buff_title.trim().is_empty() {
-                                "Buff"
+                                t(locale, "common.buff")
                             } else {
                                 buff_title
                             };
@@ -1145,10 +1166,11 @@ pub(crate) async fn shiyu_detail(
                     fight_cards.push_str(&format!(
                         r#"<div class="card" style="background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38;">
                             <h3 style="margin: 0 0 8px 0;">{room_title}</h3>
-                            <div class="meta" style="margin-bottom: 12px;">Waves: {waves_num}</div>
+                            <div class="meta" style="margin-bottom: 12px;">{waves_label}: {waves_num}</div>
                             {room_buff_html}
                             <div style="display: grid; gap: 12px; margin-top: 12px;">{monster_cards}</div>
                         </div>"#,
+                        waves_label = t(locale, "shiyu.waves"),
                     ));
                     fight_index += 1;
                 }
@@ -1159,7 +1181,7 @@ pub(crate) async fn shiyu_detail(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{} - Gear Editor</title>
+  <title>{0} - Gear Editor</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
         header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; }}
@@ -1187,24 +1209,24 @@ pub(crate) async fn shiyu_detail(
 </head>
 <body>
 <header>
-  <a href="/dashboard?tab=shiyu" class="back">← Back to Shiyu</a>
-    <form method="post" action="/shiyu/{}/select" style="margin: 0;">
+  <a href="/dashboard?tab=shiyu" class="back">{2}</a>
+    <form method="post" action="/shiyu/{1}/select" style="margin: 0;">
         <button type="submit" style="padding: 10px 18px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
-            Select this Shiyu
+            {3}
         </button>
     </form>
 </header>
 <div class="container">
-  <h1>{} #{}</h1>
-    <div class="floor-tabs">{}</div>
+  <h1>{0} {4} {1}</h1>
+    <div class="floor-tabs">{5}</div>
   <div class="cards">
-        {}
-        {}
+        {6}
+        {7}
   </div>
 </div>
 </body>
 </html>"#,
-                    shiyu_name, id, shiyu_name, id, tab_html, buff_cards, fight_cards
+                shiyu_name, id, t(locale, "shiyu.back"), t(locale, "shiyu.select"), t(locale, "common.id"), tab_html, buff_cards, fight_cards
                 );
 
                 return Html(html).into_response();
@@ -1212,7 +1234,7 @@ pub(crate) async fn shiyu_detail(
         }
     }
 
-    Html("<html><body><h1>Shiyu not found</h1></body></html>".to_string()).into_response()
+    Html(t(locale, "shiyu.not_found").to_string()).into_response()
 }
 
 pub(crate) async fn shiyu_select(
@@ -1225,11 +1247,12 @@ pub(crate) async fn shiyu_select(
         return redirect_to_login(&original_uri.0);
     };
 
+    let locale = locale_from_headers(&headers);
     let state = state_with_active_server(&state, &headers);
     if !is_zone_available_for_prefix(&state.asset_dir, id, "62") {
         return (
             StatusCode::BAD_REQUEST,
-            Html("This Shiyu zone is not available for selected server"),
+            Html(t(locale, "shiyu.zone_unavailable")),
         )
             .into_response();
     }
@@ -1240,24 +1263,24 @@ pub(crate) async fn shiyu_select(
 
     let mut hadal_zon = match read_zon_verbose(&hadal_file) {
         Some(z) => z,
-        None => {
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html(t(locale, "common.failed_read_zone").to_string()),
+                )
+                    .into_response();
+            }
+        };
+
+        zon_set_entrance_zone_id(&mut hadal_zon, 1, id);
+        let zon_content = format_zon_pretty(&zon_serialize(&hadal_zon));
+        if let Err(err) = fs::write(&hadal_file, zon_content) {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html("<h1>Failed to read hadal zone</h1>".to_string()),
+                Html(format!("{}: {}", t(locale, "common.failed_save_zone"), err)),
             )
                 .into_response();
         }
-    };
-
-    zon_set_entrance_zone_id(&mut hadal_zon, 1, id);
-    let zon_content = format_zon_pretty(&zon_serialize(&hadal_zon));
-    if let Err(err) = fs::write(&hadal_file, zon_content) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("Failed to save hadal zone: {}", err)),
-        )
-            .into_response();
-    }
 
     Redirect::to("/dashboard?tab=shiyu").into_response()
 }
@@ -1268,16 +1291,16 @@ pub(crate) async fn da_select(
     Path(id): Path<u32>,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    // Extract session and uid
     let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
+    let locale = locale_from_headers(&headers);
     let state = state_with_active_server(&state, &headers);
     if !is_zone_available_for_prefix(&state.asset_dir, id, "69") {
         return (
             StatusCode::BAD_REQUEST,
-            Html("This Deadly Assault zone is not available for selected server"),
+            Html(t(locale, "da.zone_unavailable")),
         )
             .into_response();
     }
@@ -1293,13 +1316,12 @@ pub(crate) async fn da_select(
         None => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html("<h1>Failed to read hadal zone</h1>".to_string()),
+                Html(t(locale, "common.failed_read_zone").to_string()),
             )
                 .into_response();
         }
     };
 
-    // Use the zone_id directly (supports DA variants like 69038 and 690381)
     let zone_id_to_set = id;
 
     // Update the entrance (id=9) zone_id
@@ -1339,7 +1361,7 @@ pub(crate) async fn da_select(
         if let Err(err) = fs::write(&hadal_file, zon_content) {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html(format!("Failed to save hadal zone: {}", err)),
+                Html(format!("{}: {}", t(locale, "common.failed_save_zone"), err)),
             )
                 .into_response();
         }
