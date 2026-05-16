@@ -6,8 +6,8 @@ use crate::{
     player_state::{resolve_item_path, resolve_player_uid},
     utils::svg_data_uri,
     zon::{
-        read_zon, zon_get_number, zon_get_skill_levels, zon_serialize, zon_set_number,
-        zon_set_skill_levels,
+        format_zon_pretty, read_zon, zon_get_number, zon_get_skill_levels, zon_serialize,
+        zon_set_number, zon_set_skill_levels, ZValue,
     },
 };
 use axum::{
@@ -16,6 +16,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use std::{collections::HashMap, fs};
 
 #[derive(Deserialize)]
@@ -253,7 +254,8 @@ pub(crate) fn render_bangboo_cards(state: &AppState, uid: u32, locale: Locale) -
         ));
     }
 
-    format!("<div class=\"cards\">{cards}</div>")
+    let add_panel = render_add_bangboo_panel(locale);
+    format!("{add_panel}<div class=\"cards\">{cards}</div>")
 }
 
 fn render_bangboo_skill_inputs(locale: Locale, skill_levels: &HashMap<String, u32>) -> String {
@@ -272,4 +274,106 @@ fn render_bangboo_skill_inputs(locale: Locale, skill_levels: &HashMap<String, u3
     }
 
     html
+}
+
+fn render_add_bangboo_panel(locale: Locale) -> String {
+    format!(
+        "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px;\"><form method=\"post\" action=\"/bangboo/add-all\" style=\"margin:0;\"><button type=\"submit\">{}</button></form></div></div>",
+        t(locale, "nav.bangboos"),
+        t(locale, "bangboo.add_all"),
+    )
+}
+
+pub(crate) async fn bangboo_add_all(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+) -> impl IntoResponse {
+    let Some((_session_id, session)) = get_session(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let locale = locale_from_headers(&headers);
+    let active_state = state_with_active_server(&state, &headers);
+    let uid = resolve_player_uid(&active_state, session.uid);
+    let buddy_dir = active_state.state_dir.join(format!("player/{uid}/buddy"));
+
+    let base_path = active_state.asset_dir.join("BuddyBaseTemplateTb.json");
+    let base_data = match fs::read_to_string(&base_path) {
+        Ok(d) => d,
+        Err(_) => {
+            return Html(format!("Failed to read BuddyBaseTemplateTb.json")).into_response();
+        }
+    };
+    let base_json: JsonValue = match serde_json::from_str(&base_data) {
+        Ok(v) => v,
+        Err(_) => {
+            return Html(format!("Failed to parse BuddyBaseTemplateTb.json")).into_response();
+        }
+    };
+
+    let mut existing_ids = HashMap::new();
+    if let Ok(entries) = fs::read_dir(&buddy_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) {
+                let id = name.strip_suffix(".zon").unwrap_or(&name).parse::<u32>().unwrap_or(0);
+                if id > 0 {
+                    existing_ids.insert(id, true);
+                }
+            }
+        }
+    }
+
+    let _ = fs::create_dir_all(&buddy_dir);
+
+    if let Some(items) = base_json.get("data").and_then(|v| v.as_array()) {
+        for item in items {
+            let Some(template_id) = item.get("id").and_then(|v| v.as_u64()).map(|v| v as u32) else {
+                continue;
+            };
+            if template_id >= 55000 {
+                continue;
+            }
+            if existing_ids.contains_key(&template_id) {
+                continue;
+            }
+
+            let buddy = ZValue::Object(vec![
+                ("level".to_string(), ZValue::Number(60)),
+                ("exp".to_string(), ZValue::Number(0)),
+                ("rank".to_string(), ZValue::Number(6)),
+                ("star".to_string(), ZValue::Number(1)),
+                (
+                    "skill_type_level".to_string(),
+                    ZValue::Array(vec![
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("manual".to_string())),
+                            ("level".to_string(), ZValue::Number(8)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("passive".to_string())),
+                            ("level".to_string(), ZValue::Number(5)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("qte".to_string())),
+                            ("level".to_string(), ZValue::Number(8)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("aid".to_string())),
+                            ("level".to_string(), ZValue::Number(8)),
+                        ]),
+                    ]),
+                ),
+                ("is_favorite".to_string(), ZValue::Bool(false)),
+            ]);
+
+            let serialized = format_zon_pretty(&zon_serialize(&buddy));
+            let buddy_path = buddy_dir.join(template_id.to_string());
+            if let Err(err) = fs::write(&buddy_path, serialized) {
+                return Html(format!("{}: {}", t(locale, "disc.failed_create"), err)).into_response();
+            }
+        }
+    }
+
+    Redirect::to("/dashboard?tab=bangboos").into_response()
 }

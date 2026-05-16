@@ -28,8 +28,8 @@ use config::{load_sdk_config, resolve_db_path, resolve_sdk_config_path};
 use i18n::{Locale, locale_from_headers, t};
 use player_state::resolve_player_uid;
 use routes::auth::{login, login_page, switch_server};
-use routes::avatar::{avatar_edit, avatar_update, render_avatar_cards};
-use routes::bangboo::{bangboo_edit, bangboo_update, render_bangboo_cards};
+use routes::avatar::{avatar_add_all, avatar_edit, avatar_update, render_avatar_cards};
+use routes::bangboo::{bangboo_add_all, bangboo_edit, bangboo_update, render_bangboo_cards};
 use routes::challenges::{
     da_detail, da_select, da_shiyu_update, render_da_panel, render_shiyu_panel, shiyu_detail,
     shiyu_select,
@@ -92,6 +92,7 @@ async fn main() {
         .route("/dashboard", get(dashboard))
         .route("/switch-server", get(switch_server))
         .route("/avatar/:id", get(avatar_edit).post(avatar_update))
+        .route("/avatar/add-all", post(avatar_add_all))
         .route("/weapon/:uid", get(weapon_edit).post(weapon_update))
         .route("/weapon/new", get(weapon_new).post(weapon_add))
         .route("/equip/:uid", get(equip_edit).post(equip_update))
@@ -107,6 +108,7 @@ async fn main() {
         )
         .route("/equip/lock-selected", post(equip_lock_selected))
         .route("/bangboo/:uid", get(bangboo_edit).post(bangboo_update))
+        .route("/bangboo/add-all", post(bangboo_add_all))
         .route("/da/:id", get(da_detail))
         .route("/da/:id/select", post(da_select))
         .route("/shiyu/:id", get(shiyu_detail))

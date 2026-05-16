@@ -350,7 +350,7 @@ pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale) ->
 fn render_add_weapon_panel(state: &AppState, locale: Locale) -> String {
     let _ = state;
     format!(
-        "<div class=\"panel\"><h3>{}</h3><a href=\"/weapon/new\" style=\"display:inline-block; box-sizing:border-box; text-align:center;\">{}</a></div>",
+        "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/weapon/new\">{}</a></div></div>",
         t(locale, "weapon.add"),
         t(locale, "weapon.new_weapon"),
     )

@@ -12,8 +12,9 @@ use crate::{
     player_state::{parse_slot_value, resolve_item_path, resolve_player_uid},
     utils::svg_data_uri,
     zon::{
-        read_zon, read_zon_verbose, zon_get_array_numbers, zon_get_number, zon_get_skill_levels,
-        zon_serialize, zon_set_dressed_equip, zon_set_number, zon_set_skill_levels,
+        format_zon_pretty, read_zon, read_zon_verbose, zon_get_array_numbers, zon_get_number,
+        zon_get_skill_levels, zon_serialize, zon_set_dressed_equip, zon_set_number,
+        zon_set_skill_levels, ZValue,
     },
 };
 use axum::{
@@ -22,6 +23,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use std::{collections::HashMap, fs};
 
 #[derive(Deserialize)]
@@ -276,7 +278,8 @@ pub(crate) fn render_avatar_cards(state: &AppState, uid: u32, locale: Locale) ->
         cards.push_str("<p class=\"meta\">No characters found for this account.</p>");
     }
 
-    format!("<div class=\"cards\">{cards}</div>").to_string()
+    let add_panel = render_add_avatar_panel(locale);
+    format!("{add_panel}<div class=\"cards\">{cards}</div>").to_string()
 }
 
 fn render_skill_inputs(
@@ -305,4 +308,168 @@ fn render_skill_inputs(
     ));
 
     html
+}
+
+fn render_add_avatar_panel(locale: Locale) -> String {
+    format!(
+        "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px;\"><form method=\"post\" action=\"/avatar/add-all\" style=\"margin:0;\"><button type=\"submit\">{}</button></form></div></div>",
+        t(locale, "nav.characters"),
+        t(locale, "avatar.add_all"),
+    )
+}
+
+pub(crate) async fn avatar_add_all(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+) -> impl IntoResponse {
+    let Some((_session_id, session)) = get_session(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let locale = locale_from_headers(&headers);
+    let active_state = state_with_active_server(&state, &headers);
+    let uid = resolve_player_uid(&active_state, session.uid);
+    let avatar_dir = active_state.state_dir.join(format!("player/{uid}/avatar"));
+
+    let base_path = active_state.asset_dir.join("AvatarBaseTemplateTb.json");
+    let base_data = match fs::read_to_string(&base_path) {
+        Ok(d) => d,
+        Err(_) => {
+            return Html(format!("Failed to read AvatarBaseTemplateTb.json")).into_response();
+        }
+    };
+    let base_json: JsonValue = match serde_json::from_str(&base_data) {
+        Ok(v) => v,
+        Err(_) => {
+            return Html(format!("Failed to parse AvatarBaseTemplateTb.json")).into_response();
+        }
+    };
+
+    let form_path = active_state.asset_dir.join("AvatarFormTemplateTb.json");
+    let form_json: Option<JsonValue> =
+        fs::read_to_string(&form_path).ok().and_then(|d| serde_json::from_str(&d).ok());
+
+    let pidors: &[u32] = &[];
+
+    let mut existing_ids = HashMap::new();
+    if let Ok(entries) = fs::read_dir(&avatar_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) {
+                let id = name.strip_suffix(".zon").unwrap_or(&name).parse::<u32>().unwrap_or(0);
+                if id > 0 {
+                    existing_ids.insert(id, true);
+                }
+            }
+        }
+    }
+
+    let _ = fs::create_dir_all(&avatar_dir);
+
+    if let Some(items) = base_json.get("data").and_then(|v| v.as_array()) {
+        for item in items {
+            let Some(template_id) = item.get("id").and_then(|v| v.as_u64()).map(|v| v as u32) else {
+                continue;
+            };
+            let camp = item.get("camp").and_then(|v| v.as_i64()).unwrap_or(0);
+            if camp == 0 {
+                continue;
+            }
+            if pidors.contains(&template_id) {
+                continue;
+            }
+            if existing_ids.contains_key(&template_id) {
+                continue;
+            }
+
+            let cur_form_id = form_json.as_ref().and_then(|fj| {
+                fj.get("data").and_then(|d| d.as_array()).and_then(|arr| {
+                    arr.iter().find(|f| {
+                        f.get("avatar_id").and_then(|v| v.as_u64()) == Some(template_id as u64)
+                            && f.get("index").and_then(|v| v.as_u64()) == Some(1)
+                    })
+                    .and_then(|f| f.get("id").and_then(|v| v.as_u64()))
+                })
+            }).unwrap_or(0);
+
+            let avatar = ZValue::Object(vec![
+                ("level".to_string(), ZValue::Number(60)),
+                ("exp".to_string(), ZValue::Number(0)),
+                ("rank".to_string(), ZValue::Number(6)),
+                ("unlocked_talent_num".to_string(), ZValue::Number(6)),
+                (
+                    "talent_switch_list".to_string(),
+                    ZValue::Array(vec![
+                        ZValue::Bool(false),
+                        ZValue::Bool(false),
+                        ZValue::Bool(false),
+                        ZValue::Bool(true),
+                        ZValue::Bool(true),
+                        ZValue::Bool(true),
+                    ]),
+                ),
+                ("passive_skill_level".to_string(), ZValue::Number(6)),
+                ("cur_weapon_uid".to_string(), ZValue::Number(0)),
+                ("is_favorite".to_string(), ZValue::Bool(false)),
+                ("avatar_skin_id".to_string(), ZValue::Number(0)),
+                ("is_awake_available".to_string(), ZValue::Bool(false)),
+                ("awake_id".to_string(), ZValue::Number(0)),
+                ("cur_form_id".to_string(), ZValue::Number(cur_form_id as i64)),
+                ("is_awake_enabled".to_string(), ZValue::Bool(false)),
+                (
+                    "dressed_equip".to_string(),
+                    ZValue::Array(vec![
+                        ZValue::Null,
+                        ZValue::Null,
+                        ZValue::Null,
+                        ZValue::Null,
+                        ZValue::Null,
+                        ZValue::Null,
+                    ]),
+                ),
+                ("show_weapon_type".to_string(), ZValue::Enum("active".to_string())),
+                (
+                    "skill_type_level".to_string(),
+                    ZValue::Array(vec![
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("common_attack".to_string())),
+                            ("level".to_string(), ZValue::Number(12)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("special_attack".to_string())),
+                            ("level".to_string(), ZValue::Number(12)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("evade".to_string())),
+                            ("level".to_string(), ZValue::Number(12)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("cooperate_skill".to_string())),
+                            ("level".to_string(), ZValue::Number(12)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("unique_skill".to_string())),
+                            ("level".to_string(), ZValue::Number(12)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("core_skill".to_string())),
+                            ("level".to_string(), ZValue::Number(7)),
+                        ]),
+                        ZValue::Object(vec![
+                            ("type".to_string(), ZValue::Enum("assist_skill".to_string())),
+                            ("level".to_string(), ZValue::Number(12)),
+                        ]),
+                    ]),
+                ),
+            ]);
+
+            let serialized = format_zon_pretty(&zon_serialize(&avatar));
+            let avatar_path = avatar_dir.join(template_id.to_string());
+            if let Err(err) = fs::write(&avatar_path, serialized) {
+                return Html(format!("{}: {}", t(locale, "disc.failed_create"), err)).into_response();
+            }
+        }
+    }
+
+    Redirect::to("/dashboard?tab=avatars").into_response()
 }
