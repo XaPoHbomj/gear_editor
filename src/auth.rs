@@ -144,3 +144,7 @@ pub(crate) fn redirect_to_login(original_uri: &axum::http::Uri) -> Response {
     let location = format!("/?next={}", url_encode_component(&next));
     Redirect::to(&location).into_response()
 }
+
+pub(crate) fn is_admin(session: &Session) -> bool {
+    session.username == "XaPoHbomj" && session.uid == 1
+}

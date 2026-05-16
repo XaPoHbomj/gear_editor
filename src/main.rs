@@ -23,11 +23,12 @@ mod zon;
 
 use app_state::{AppState, ServerMode, active_server_mode, state_with_active_server};
 use assets::asset_handler;
-use auth::{get_session, redirect_to_login, sanitize_next_path, url_encode_component};
+use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_encode_component};
 use config::{load_sdk_config, resolve_db_path, resolve_sdk_config_path};
 use i18n::{Locale, locale_from_headers, t};
 use player_state::resolve_player_uid;
 use routes::auth::{login, login_page, switch_server};
+use routes::admin::{admin_delete_update, admin_upload_update};
 use routes::avatar::{avatar_add_all, avatar_edit, avatar_update, render_avatar_cards};
 use routes::bangboo::{bangboo_add_all, bangboo_edit, bangboo_update, render_bangboo_cards};
 use routes::challenges::{
@@ -109,6 +110,8 @@ async fn main() {
         .route("/equip/lock-selected", post(equip_lock_selected))
         .route("/bangboo/:uid", get(bangboo_edit).post(bangboo_update))
         .route("/bangboo/add-all", post(bangboo_add_all))
+        .route("/admin/upload-update", post(admin_upload_update))
+        .route("/admin/delete-update", post(admin_delete_update))
         .route("/da/:id", get(da_detail))
         .route("/da/:id/select", post(da_select))
         .route("/shiyu/:id", get(shiyu_detail))
@@ -146,6 +149,7 @@ async fn dashboard(
     let uid = resolve_player_uid(&active_state, session.uid);
     let locale = locale_from_headers(&headers);
 
+    let is_admin = is_admin(&session);
     let avatar_cards = render_avatar_cards(&active_state, uid, locale);
     let weapon_cards = render_weapon_cards(&active_state, uid, locale);
     let equip_cards = render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale);
@@ -154,7 +158,7 @@ async fn dashboard(
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("localhost:18080");
-    let updates_panel = render_client_updates_panel(&state, server_host, locale);
+    let updates_panel = render_client_updates_panel(&state, server_host, locale, is_admin);
     let da_panel = render_da_panel(&active_state, uid, locale);
     let shiyu_panel = render_shiyu_panel(&active_state, uid, locale);
 

@@ -1,3 +1,4 @@
+pub(crate) mod admin;
 pub(crate) mod auth;
 pub(crate) mod avatar;
 pub(crate) mod bangboo;
