@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gear Editor — UI Brandbook</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; overflow-x: hidden; }
+    header { padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; position: sticky; top: 0; z-index: 20; }
+    .container { padding: 24px; max-width: 960px; margin: 0 auto; }
+    h1 { margin: 0 0 24px; font-size: 24px; }
+    h2 { margin: 32px 0 12px; font-size: 18px; border-bottom: 1px solid #232a38; padding-bottom: 6px; }
+    h3 { margin: 20px 0 8px; font-size: 14px; color: #9aa4b2; text-transform: uppercase; letter-spacing: 0.5px; }
+    .section-title { margin: 32px 0 16px; font-size: 20px; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+    .card { background: #1b1f2a; padding: 14px; border-radius: 12px; text-decoration: none; color: #e6e6e6; border: 1px solid #232a38; }
+    .card h3 { margin: 6px 0 8px; font-size: 16px; text-transform: none; letter-spacing: 0; color: #e6e6e6; }
+    .card .meta { color: #9aa4b2; font-size: 12px; margin-top: 2px; }
+    .thumb { display: block; width: 100%; height: 160px; object-fit: cover; object-position: top; border-radius: 8px; background: #0f1115; border: 1px solid #2a3140; }
+    .pill { display: inline-block; padding: 4px 8px; background: #2a3140; border-radius: 999px; font-size: 12px; color: #9aa4b2; }
+    .meta { color: #9aa4b2; font-size: 12px; }
+    .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .row > * { min-width: 0; }
+
+    /* Panel */
+    .panel { background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .panel h3 { margin: 0; font-size: 14px; text-transform: none; letter-spacing: 0; color: #e6e6e6; }
+    .panel a { display: inline-flex; align-items: center; justify-content: center; margin-top: 16px; padding: 10px 14px; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; text-decoration: none; box-sizing: border-box; }
+    .panel button { margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; font-family: inherit; font-size: inherit; }
+    .panel div button, .panel div form button, .panel div a { margin-top: 0; }
+    .panel form { width: 100%; }
+
+    /* Form elements */
+    label { display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }
+    input, select { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; font-family: inherit; font-size: inherit; }
+    button { padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; font-family: inherit; font-size: inherit; }
+    .apply { background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; font-family: inherit; font-size: inherit; }
+    .danger { background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; font-family: inherit; font-size: inherit; }
+
+    /* Hero */
+    .hero { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }
+    .hero img { width: 120px; height: 120px; border-radius: 12px; object-fit: contain; border: 1px solid #2a3140; background: #0f1115; }
+    .hero h1 { margin: 0; font-size: 22px; border: 0; padding: 0; }
+
+    /* Preview image */
+    .preview-img-demo { width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 0 8px; }
+
+    /* Color swatches */
+    .swatches { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .swatch { width: 100px; padding: 8px; border-radius: 8px; text-align: center; font-size: 10px; }
+    .swatch span { display: block; margin-top: 4px; }
+
+    /* Tabs demo */
+    .tab-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .tab-bar a { padding: 8px 12px; border-radius: 8px; text-decoration: none; color: #c7d1e0; background: #1b2230; white-space: nowrap; font-size: 14px; }
+    .tab-bar a.active { background: #4c7dff; color: #fff; }
+    .tab-bar a.mode { background: #2a3140; color: #c7d1e0; }
+
+    /* Sections */
+    .demo-section { background: #151a24; padding: 16px; border-radius: 12px; margin-bottom: 16px; }
+
+    .color-chip { background: #1b1f2a; border: 1px solid #232a38; border-radius: 8px; padding: 12px; flex: 1; min-width: 140px; }
+    .color-chip .preview { height: 40px; border-radius: 6px; margin-bottom: 6px; }
+    .color-chip .name { font-size: 12px; font-weight: 600; }
+    .color-chip .hex { font-size: 11px; color: #9aa4b2; margin-top: 2px; }
+    .color-row { display: flex; flex-wrap: wrap; gap: 10px; }
+
+    hr { border: 0; border-top: 1px solid #232a38; margin: 32px 0; }
+  </style>
+</head>
+<body>
+<header>
+  <div style="font-weight:700; font-size:16px;">Brandbook</div>
+  <div class="meta">Gear Editor Design System</div>
+</header>
+<div class="container">
+
+  <h1>Gear Editor — UI Brandbook</h1>
+
+  <!-- Colors -->
+  <h2>Color Palette</h2>
+  <div class="color-row">
+    <div class="color-chip"><div class="preview" style="background:#0f1115;"></div><div class="name">bg-page</div><div class="hex">#0f1115</div></div>
+    <div class="color-chip"><div class="preview" style="background:#151a24;"></div><div class="name">bg-header / bg-section</div><div class="hex">#151a24</div></div>
+    <div class="color-chip"><div class="preview" style="background:#1b1f2a;"></div><div class="name">bg-card / bg-panel</div><div class="hex">#1b1f2a</div></div>
+    <div class="color-chip"><div class="preview" style="background:#232a38;"></div><div class="name">border-panel / card border</div><div class="hex">#232a38</div></div>
+    <div class="color-chip"><div class="preview" style="background:#1b2230;"></div><div class="name">bg-tab-inactive</div><div class="hex">#1b2230</div></div>
+    <div class="color-chip"><div class="preview" style="background:#4c7dff;"></div><div class="name">bg-tab-active / primary</div><div class="hex">#4c7dff</div></div>
+    <div class="color-chip"><div class="preview" style="background:#121620;"></div><div class="name">bg-input</div><div class="hex">#121620</div></div>
+    <div class="color-chip"><div class="preview" style="background:#22c55e;"></div><div class="name">bg-apply</div><div class="hex">#22c55e</div></div>
+    <div class="color-chip"><div class="preview" style="background:#ef4444;"></div><div class="name">bg-danger</div><div class="hex">#ef4444</div></div>
+    <div class="color-chip"><div class="preview" style="background:#2a3140;"></div><div class="name">border-default / bg-pill</div><div class="hex">#2a3140</div></div>
+  </div>
+  <div class="color-row" style="margin-top:8px;">
+    <div class="color-chip"><div class="preview" style="background:#e6e6e6;"></div><div class="name">text-primary</div><div class="hex">#e6e6e6</div></div>
+    <div class="color-chip"><div class="preview" style="background:#9aa4b2;"></div><div class="name">text-meta</div><div class="hex">#9aa4b2</div></div>
+    <div class="color-chip"><div class="preview" style="background:#c7d1e0;"></div><div class="name">text-tab-inactive</div><div class="hex">#c7d1e0</div></div>
+    <div class="color-chip"><div class="preview" style="background:#0b1220;"></div><div class="name">text-on-apply</div><div class="hex">#0b1220</div></div>
+    <div class="color-chip"><div class="preview" style="background:#fff;"></div><div class="name">text-on-primary / on-danger</div><div class="hex">#ffffff</div></div>
+  </div>
+
+  <hr />
+
+  <!-- Typography -->
+  <h2>Typography</h2>
+  <div class="demo-section">
+    <p style="font-family:system-ui; font-size:24px; font-weight:700; margin:0 0 8px;">Heading 1 — 24px Bold</p>
+    <p style="font-family:system-ui; font-size:18px; font-weight:600; margin:0 0 8px; color:#e6e6e6;">Heading 2 — 18px Semibold</p>
+    <p style="font-family:system-ui; font-size:16px; font-weight:600; margin:0 0 8px;">Card title (h3) — 16px Semibold</p>
+    <p style="font-family:system-ui; font-size:14px; font-weight:600; margin:0 0 8px;">Panel title — 14px Semibold</p>
+    <p style="font-family:system-ui; font-size:14px; margin:0 0 4px;">Body text — 14px</p>
+    <p class="meta" style="margin:0 0 4px; font-size:12px;">Meta text — 12px #9aa4b2</p>
+    <p style="color:#9aa4b2; font-size:12px; margin:0;">Label text — 12px #9aa4b2 (display: block; margin: 12px 0 6px)</p>
+  </div>
+
+  <hr />
+
+  <!-- Tab bar -->
+  <h2>Tab Bar</h2>
+  <div class="demo-section">
+    <div class="tab-bar">
+      <a href="#" class="active">Characters</a>
+      <a href="#">Weapons</a>
+      <a href="#">Discs</a>
+      <a href="#">Bangboos</a>
+      <a href="#">Deadly Assault</a>
+      <a href="#">Shiyu</a>
+      <a href="#">Client Updates</a>
+      <a href="#" class="mode">Beta</a>
+      <a href="#" class="mode">Prod</a>
+    </div>
+  </div>
+
+  <hr />
+
+  <!-- Panel -->
+  <h2>Panel (action bar above card grids)</h2>
+
+  <h3>Panel with link button (weapons style)</h3>
+  <div class="panel">
+    <h3>Add Weapon</h3>
+    <div style="display:flex; gap:8px;">
+      <a href="#">New weapon</a>
+    </div>
+  </div>
+
+  <h3>Panel with multiple links (discs style)</h3>
+  <div class="panel">
+    <h3>Discs</h3>
+    <div style="display:flex; gap:8px;">
+      <a href="#">New disc</a>
+      <a href="#">Generate discs</a>
+      <a href="#">Delete discs</a>
+      <a href="#">Lock discs</a>
+    </div>
+  </div>
+
+  <h3>Panel with form submit (characters / bangboos style)</h3>
+  <div class="panel">
+    <h3>Characters</h3>
+    <div style="display:flex; gap:8px;">
+      <form method="get" style="margin:0;">
+        <button type="submit">Add all agents</button>
+      </form>
+    </div>
+  </div>
+
+  <h3>Panel with danger button (delete mode)</h3>
+  <div class="panel">
+    <h3>Delete Mode</h3>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="danger">Delete selected discs</button>
+      <button class="danger">Delete all unlocked</button>
+      <a href="#">Cancel</a>
+    </div>
+  </div>
+
+  <hr />
+
+  <!-- Hero -->
+  <h2>Hero (edit page header)</h2>
+  <div class="demo-section">
+    <div class="hero">
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Crect fill='%23121620' width='120' height='120'/%3E%3Ctext x='60' y='65' text-anchor='middle' fill='%239aa4b2' font-size='11' font-family='system-ui'%3EItem Image%3C/text%3E%3C/svg%3E" alt="Placeholder" />
+      <div>
+        <h1 style="border:0; padding:0; margin:0; font-size:22px;">Edit Weapon Name</h1>
+        <div class="meta" style="margin-top:4px;">UID 42 · ID 1011</div>
+      </div>
+    </div>
+  </div>
+
+  <hr />
+
+  <!-- Card Grid -->
+  <h2>Card Grid</h2>
+  <div class="grid">
+    <div class="card">
+      <img class="thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='160' viewBox='0 0 220 160'%3E%3Crect fill='%23121620' width='220' height='160'/%3E%3Ctext x='110' y='85' text-anchor='middle' fill='%239aa4b2' font-size='12' font-family='system-ui'%3ECharacter%3C/text%3E%3C/svg%3E" alt="" />
+      <span class="pill" style="margin-top:8px;">ID 1011</span>
+      <h3>Anby</h3>
+      <div class="meta">Level 60</div>
+    </div>
+    <div class="card">
+      <img class="thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='160' viewBox='0 0 220 160'%3E%3Crect fill='%23121620' width='220' height='160'/%3E%3Ctext x='110' y='85' text-anchor='middle' fill='%239aa4b2' font-size='12' font-family='system-ui'%3EWeapon%3C/text%3E%3C/svg%3E" alt="" />
+      <span class="pill">UID 1</span>
+      <h3>Starlight Engine</h3>
+      <div class="meta">Level 60</div>
+    </div>
+    <div class="card">
+      <img class="thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='160' viewBox='0 0 220 160'%3E%3Crect fill='%23121620' width='220' height='160'/%3E%3Ctext x='110' y='85' text-anchor='middle' fill='%239aa4b2' font-size='12' font-family='system-ui'%3EDisc%3C/text%3E%3C/svg%3E" alt="" />
+      <span class="pill">UID 10</span>
+      <h3>Chaos Metal</h3>
+      <div class="meta">Set: Chaos Metal</div>
+      <div class="meta">Slot: 4</div>
+      <div class="meta">Level: 15</div>
+      <div class="meta">Main: ATK%</div>
+      <div class="meta">Sub: CRIT Rate, ATK, DEF...</div>
+    </div>
+    <div class="card">
+      <img class="thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='160' viewBox='0 0 220 160'%3E%3Crect fill='%23121620' width='220' height='160'/%3E%3Ctext x='110' y='85' text-anchor='middle' fill='%239aa4b2' font-size='12' font-family='system-ui'%3EBangboo%3C/text%3E%3C/svg%3E" alt="" />
+      <span class="pill">UID 50001</span>
+      <h3>Bangvolver</h3>
+      <div class="meta">Level 60</div>
+      <div class="meta">Rank 6</div>
+    </div>
+  </div>
+
+  <hr />
+
+  <!-- Preview Image -->
+  <h2>Preview Image (weapon/disc creation forms)</h2>
+  <div class="demo-section">
+    <img class="preview-img-demo" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect fill='%23121620' width='200' height='200'/%3E%3Ctext x='100' y='108' text-anchor='middle' fill='%239aa4b2' font-size='12' font-family='system-ui'%3EPreview Image%3C/text%3E%3C/svg%3E" alt="Preview" />
+    <label>Weapon</label>
+    <select>
+      <option selected disabled>Select weapon</option>
+      <option>Starlight Engine</option>
+      <option>The Restrained</option>
+    </select>
+    <p class="meta" style="margin-top:8px;">33.33% width on desktop, 100% on mobile. <code>margin: 0 0 8px</code> (left-aligned).</p>
+  </div>
+
+  <hr />
+
+  <!-- Form Elements -->
+  <h2>Form Elements</h2>
+
+  <div class="row">
+    <div>
+      <label>Text input</label>
+      <input type="text" placeholder="Placeholder text" />
+    </div>
+    <div>
+      <label>Number input</label>
+      <input type="number" min="0" value="60" />
+    </div>
+    <div>
+      <label>Select</label>
+      <select>
+        <option>Option 1</option>
+        <option selected>Option 2</option>
+        <option>Option 3</option>
+      </select>
+    </div>
+    <div>
+      <label>Checkbox</label>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+        <input type="checkbox" id="demo-check" style="width:auto;" checked />
+        <label for="demo-check" style="margin:0; cursor:pointer;">Lock disc (prevent deletion)</label>
+      </div>
+    </div>
+  </div>
+
+  <hr />
+
+  <!-- Buttons -->
+  <h2>Buttons</h2>
+  <div style="display:flex; flex-wrap:wrap; gap:10px;">
+    <button>Primary button</button>
+    <button class="apply">Apply changes</button>
+    <button class="danger">Delete</button>
+  </div>
+  <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:12px;">
+    <a href="#" style="display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border-radius:8px; background:#4c7dff; color:#fff; font-weight:600; text-decoration:none;">Panel link button</a>
+    <a href="#" style="display:inline-flex; align-items:center; justify-content:center; padding:8px 14px; border-radius:8px; background:#22c55e; color:#0b1220; font-weight:600; text-decoration:none;">Apply (header)</a>
+  </div>
+
+  <hr />
+
+  <!-- Row layout -->
+  <h2>Row (2-column form grid)</h2>
+  <div class="demo-section">
+    <div class="row">
+      <div>
+        <label>Field one</label>
+        <input type="text" />
+      </div>
+      <div>
+        <label>Field two</label>
+        <input type="text" />
+      </div>
+      <div>
+        <label>Field three</label>
+        <input type="text" />
+      </div>
+      <div>
+        <label>Field four</label>
+        <input type="text" />
+      </div>
+    </div>
+  </div>
+
+  <hr />
+
+  <!-- Mobile drawer -->
+  <h2>Mobile Drawer</h2>
+  <div style="background:#151a24; border:1px solid #232a38; border-radius:12px; padding:16px; max-width:320px;">
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <a href="#" style="display:block; width:100%; box-sizing:border-box; padding:8px 12px; border-radius:8px; text-decoration:none; color:#c7d1e0; background:#1b2230; white-space:normal; line-height:1.25;">Characters</a>
+      <a href="#" style="display:block; width:100%; box-sizing:border-box; padding:8px 12px; border-radius:8px; text-decoration:none; color:#c7d1e0; background:#1b2230; white-space:normal; line-height:1.25; background:#4c7dff; color:#fff;">Weapons</a>
+      <a href="#" style="display:block; width:100%; box-sizing:border-box; padding:8px 12px; border-radius:8px; text-decoration:none; color:#c7d1e0; background:#1b2230; white-space:normal; line-height:1.25;">Discs</a>
+      <a href="#" style="display:block; width:100%; box-sizing:border-box; padding:8px 12px; border-radius:8px; text-decoration:none; color:#c7d1e0; background:#1b2230; white-space:normal; line-height:1.25;">Bangboos</a>
+    </div>
+    <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px;">
+      <div class="meta">Signed in as admin</div>
+      <select style="width:100%;">
+        <option>EN</option>
+        <option>RU</option>
+        <option selected>CN</option>
+        <option>KR</option>
+        <option>JP</option>
+      </select>
+      <div style="display:flex; gap:4px;">
+        <a href="#" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; background:#4c7dff; color:#fff;">Beta</a>
+        <a href="#" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; background:#2a3140; color:#c7d1e0;">Prod</a>
+      </div>
+    </div>
+  </div>
+
+  <hr />
+
+  <!-- Pill -->
+  <h2>Pill / Badge</h2>
+  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+    <span class="pill">ID 1011</span>
+    <span class="pill">UID 42</span>
+    <span style="display:inline-block; padding:4px 8px; background:#ef4444; border-radius:999px; font-size:12px; color:#fff;">Danger pill</span>
+    <span style="display:inline-block; padding:4px 8px; background:#22c55e; border-radius:999px; font-size:12px; color:#0b1220;">Success pill</span>
+  </div>
+
+  <hr />
+
+  <!-- Usage recipes -->
+  <h2 style="margin-top:40px;">Usage Recipes</h2>
+
+  <h3>Panel with link button</h3>
+  <pre style="background:#151a24; padding:12px; border-radius:8px; font-size:12px; overflow-x:auto; color:#c7d1e0; border:1px solid #232a38;">
+&lt;div class="panel"&gt;
+  &lt;h3&gt;Add Weapon&lt;/h3&gt;
+  &lt;div style="display:flex; gap:8px;"&gt;
+    &lt;a href="/weapon/new"&gt;New weapon&lt;/a&gt;
+  &lt;/div&gt;
+&lt;/div&gt;</pre>
+
+  <h3>Panel with form submit button</h3>
+  <pre style="background:#151a24; padding:12px; border-radius:8px; font-size:12px; overflow-x:auto; color:#c7d1e0; border:1px solid #232a38;">
+&lt;div class="panel"&gt;
+  &lt;h3&gt;Characters&lt;/h3&gt;
+  &lt;div style="display:flex; gap:8px;"&gt;
+    &lt;form method="post" action="/avatar/add-all" style="margin:0;"&gt;
+      &lt;button type="submit"&gt;Add all agents&lt;/button&gt;
+    &lt;/form&gt;
+  &lt;/div&gt;
+&lt;/div&gt;</pre>
+
+  <h3>Preview image + JavaScript</h3>
+  <pre style="background:#151a24; padding:12px; border-radius:8px; font-size:12px; overflow-x:auto; color:#c7d1e0; border:1px solid #232a38;">
+&lt;img id="preview" class="preview-img" /&gt;
+&lt;label&gt;Select item&lt;/label&gt;
+&lt;select name="item_id" id="item_id"&gt;
+  &lt;option value="" disabled selected&gt;Choose...&lt;/option&gt;
+&lt;/select&gt;
+&lt;script&gt;
+var images = {JSON_MAP};
+var p = document.getElementById("preview");
+var s = document.getElementById("item_id");
+s.addEventListener("change", function() {
+  var u = images[s.value];
+  if (u) { p.src = u; p.style.display = "block"; }
+  else { p.style.display = "none"; }
+});
+&lt;/script&gt;</pre>
+
+  <h3>Card in grid</h3>
+  <pre style="background:#151a24; padding:12px; border-radius:8px; font-size:12px; overflow-x:auto; color:#c7d1e0; border:1px solid #232a38;">
+&lt;div class="cards"&gt;
+  &lt;a class="card" href="/avatar/1011"&gt;
+    &lt;img class="thumb" src="..." alt="Anby" /&gt;
+    &lt;span class="pill"&gt;ID 1011&lt;/span&gt;
+    &lt;h3&gt;Anby&lt;/h3&gt;
+    &lt;div class="meta"&gt;Level 60&lt;/div&gt;
+  &lt;/a&gt;
+&lt;/div&gt;</pre>
+
+  <h3>Hero (edit page header)</h3>
+  <pre style="background:#151a24; padding:12px; border-radius:8px; font-size:12px; overflow-x:auto; color:#c7d1e0; border:1px solid #232a38;">
+&lt;div class="hero"&gt;
+  &lt;img src="..." alt="Name" /&gt;
+  &lt;div&gt;
+    &lt;h1&gt;Edit Character Name&lt;/h1&gt;
+    &lt;div class="meta"&gt;ID 1011&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;</pre>
+
+  <p class="meta" style="margin-top:32px;">See <a href="BRANDBOOK.md" style="color:#4c7dff;">BRANDBOOK.md</a> for full documentation.</p>
+
+</div>
+</body>
+</html>
