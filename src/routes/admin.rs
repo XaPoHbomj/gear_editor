@@ -70,14 +70,13 @@ pub(crate) async fn admin_upload_update(
             .into_response();
         }
 
-        let file = match tokio::fs::File::create(&dest).await {
+        let mut file = match tokio::fs::File::create(&dest).await {
             Ok(f) => f,
             Err(e) => {
                 return Html(format!("Failed to create file: {}", e)).into_response();
             }
         };
 
-        let mut writer = tokio::io::BufWriter::new(file);
         use futures_util::StreamExt;
 
         let mut stream = field;
@@ -85,7 +84,7 @@ pub(crate) async fn admin_upload_update(
             match bytes {
                 Ok(chunk) => {
                     if let Err(e) =
-                        tokio::io::AsyncWriteExt::write_all(&mut writer, &chunk).await
+                        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await
                     {
                         let _ = tokio::fs::remove_file(&dest).await;
                         return Html(format!("Failed to write file: {}", e)).into_response();
@@ -98,9 +97,9 @@ pub(crate) async fn admin_upload_update(
             }
         }
 
-        if let Err(e) = tokio::io::AsyncWriteExt::flush(&mut writer).await {
+        if let Err(e) = file.sync_all().await {
             let _ = tokio::fs::remove_file(&dest).await;
-            return Html(format!("Failed to finalize file: {}", e)).into_response();
+            return Html(format!("Failed to sync file: {}", e)).into_response();
         }
 
         saved = true;

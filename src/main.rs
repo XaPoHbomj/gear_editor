@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    extract::{OriginalUri, Query, State},
+    extract::{DefaultBodyLimit, OriginalUri, Query, State},
     http::{HeaderMap, header},
     response::{Html, IntoResponse, Redirect},
     routing::{get, post},
@@ -110,7 +110,7 @@ async fn main() {
         .route("/equip/lock-selected", post(equip_lock_selected))
         .route("/bangboo/:uid", get(bangboo_edit).post(bangboo_update))
         .route("/bangboo/add-all", post(bangboo_add_all))
-        .route("/admin/upload-update", post(admin_upload_update))
+        .route("/admin/upload-update", post(admin_upload_update).layer(DefaultBodyLimit::disable()))
         .route("/admin/delete-update", post(admin_delete_update))
         .route("/da/:id", get(da_detail))
         .route("/da/:id/select", post(da_select))

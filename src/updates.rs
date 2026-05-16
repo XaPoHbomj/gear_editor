@@ -82,9 +82,12 @@ pub(crate) fn render_client_updates_panel(
                         text.textContent = "0%";
                         var formData = new FormData();
                         formData.append("file", file);
-                        var xhr = new XMLHttpRequest();
-                        var startTime = Date.now();
-                        xhr.upload.addEventListener("progress", function(ev) {{
+                    var xhr = new XMLHttpRequest();
+                    var startTime = Date.now();
+                    var uploading = true;
+                    var warnOnLeave = function(e) {{ if (uploading) {{ e.preventDefault(); e.returnValue = ""; }} }};
+                    window.addEventListener("beforeunload", warnOnLeave);
+                    xhr.upload.addEventListener("progress", function(ev) {{
                             if (ev.lengthComputable) {{
                                 var pct = Math.round(ev.loaded / ev.total * 100);
                                 bar.style.width = pct + "%";
@@ -96,7 +99,12 @@ pub(crate) fn render_client_updates_panel(
                                 }}
                             }}
                         }});
+                        var cleanup = function() {{
+                            uploading = false;
+                            window.removeEventListener("beforeunload", warnOnLeave);
+                        }};
                         xhr.addEventListener("load", function() {{
+                            cleanup();
                             if (xhr.status >= 200 && xhr.status < 300) {{
                                 window.location.href = "/dashboard?tab=updates";
                             }} else {{
@@ -108,7 +116,16 @@ pub(crate) fn render_client_updates_panel(
                             }}
                         }});
                         xhr.addEventListener("error", function() {{
+                            cleanup();
                             errorEl.textContent = "Network error during upload";
+                            errorEl.style.display = "block";
+                            btn.disabled = false;
+                            btn.textContent = "{upload_btn}";
+                            wrap.style.display = "none";
+                        }});
+                        xhr.addEventListener("abort", function() {{
+                            cleanup();
+                            errorEl.textContent = "Upload cancelled";
                             errorEl.style.display = "block";
                             btn.disabled = false;
                             btn.textContent = "{upload_btn}";
