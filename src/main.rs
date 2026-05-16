@@ -228,8 +228,8 @@ async fn dashboard(
         .panel form {{ width: 100%; }}
         .panel label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         .panel input, .panel select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
-        .panel button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .panel div button, .panel div a {{ margin-top: 0; }}
+        .panel button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; font-family: inherit; font-size: inherit; }}
+        .panel div button, .panel div form button, .panel div a {{ margin-top: 0; }}
         .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
         .row > * {{ min-width: 0; }}
     .apply {{ background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}

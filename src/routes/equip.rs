@@ -413,7 +413,7 @@ pub(crate) async fn equip_new(
         button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
         .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
         .row > * {{ min-width: 0; }}
-        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 auto 8px; }}
+        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 0 8px; }}
         @media (max-width: 768px) {{
             .container {{ padding: 14px; }}
             .row {{ grid-template-columns: 1fr; }}
@@ -678,7 +678,7 @@ pub(crate) async fn equip_generate(
         .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
         .row > * {{ min-width: 0; }}
         .meta {{ color: #9aa4b2; font-size: 12px; }}
-        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 auto 8px; }}
+        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 0 8px; }}
         @media (max-width: 768px) {{ .preview-img {{ width: 100%; }} }}
     </style>
 </head>

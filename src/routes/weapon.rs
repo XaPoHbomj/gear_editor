@@ -209,7 +209,7 @@ pub(crate) async fn weapon_new(
             .row {{ grid-template-columns: 1fr; }}
             button {{ width: 100%; }}
         }}
-        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 auto 8px; }}
+        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 0 8px; }}
         @media (max-width: 768px) {{ .preview-img {{ width: 100%; }} }}
     </style>
 </head>
