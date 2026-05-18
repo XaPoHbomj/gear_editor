@@ -2,6 +2,7 @@ use crate::{
     app_state::AppState,
     auth::{get_session, is_admin, redirect_to_login},
     i18n::{locale_from_headers, t},
+    utils::audit_log,
 };
 use axum::{
     extract::{Multipart, OriginalUri, State},
@@ -52,6 +53,7 @@ pub(crate) async fn admin_upload_update(
     }
 
     let mut saved = false;
+    let mut saved_name = String::new();
     while let Ok(Some(field)) = multipart.next_field().await {
         let Some(file_name) = field.file_name().map(|s| s.to_string()) else {
             continue;
@@ -102,6 +104,7 @@ pub(crate) async fn admin_upload_update(
             return Html(format!("Failed to sync file: {}", e)).into_response();
         }
 
+        saved_name = file_name;
         saved = true;
         break;
     }
@@ -109,6 +112,8 @@ pub(crate) async fn admin_upload_update(
     if !saved {
         return Html(t(locale, "updates.upload_no_file")).into_response();
     }
+
+    audit_log(&state.root_dir, &session.username, session.uid, "upload_update", &format!("uploaded {}", saved_name));
 
     Redirect::to("/dashboard?tab=updates").into_response()
 }

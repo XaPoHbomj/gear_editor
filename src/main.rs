@@ -27,7 +27,7 @@ use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_enc
 use config::{load_sdk_config, resolve_db_path, resolve_sdk_config_path};
 use i18n::{Locale, locale_from_headers, t};
 use player_state::resolve_player_uid;
-use routes::auth::{login, login_page, switch_server};
+use routes::auth::{login, login_page, logout, switch_server};
 use routes::admin::{admin_delete_update, admin_upload_update};
 use routes::avatar::{avatar_add_all, avatar_edit, avatar_update, render_avatar_cards};
 use routes::bangboo::{bangboo_add_all, bangboo_edit, bangboo_update, render_bangboo_cards};
@@ -48,6 +48,11 @@ struct TabQuery {
     tab: Option<String>,
     delete: Option<u8>,
     lock: Option<u8>,
+    set_id: Option<String>,
+    slot: Option<String>,
+    main_stat: Option<String>,
+    status: Option<String>,
+    page: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -92,6 +97,7 @@ async fn main() {
         .route("/login", post(login))
         .route("/dashboard", get(dashboard))
         .route("/switch-server", get(switch_server))
+        .route("/logout", get(logout))
         .route("/avatar/:id", get(avatar_edit).post(avatar_update))
         .route("/avatar/add-all", post(avatar_add_all))
         .route("/weapon/:uid", get(weapon_edit).post(weapon_update))
@@ -127,6 +133,16 @@ async fn main() {
         .await
         .expect("Failed to bind GEAR_EDITOR_ADDR");
 
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let removed = auth::gc_sessions(std::time::Duration::from_secs(86400));
+            if removed > 0 {
+                println!("session GC: removed {} inactive sessions", removed);
+            }
+        }
+    });
+
     println!("gear_editor listening on http://{addr}");
     axum::serve(listener, app).await.unwrap();
 }
@@ -144,6 +160,10 @@ async fn dashboard(
     let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
     let delete_mode = query.delete.unwrap_or(0) == 1;
     let lock_mode = query.lock.unwrap_or(0) == 1;
+    let filter_set_id = query.set_id.and_then(|s| s.parse::<u32>().ok());
+    let filter_slot = query.slot.and_then(|s| s.parse::<u32>().ok());
+    let filter_main_stat = query.main_stat.and_then(|s| s.parse::<u32>().ok());
+    let filter_page = query.page.and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
     let current_mode = active_server_mode(&headers);
     let active_state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&active_state, session.uid);
@@ -152,7 +172,7 @@ async fn dashboard(
     let is_admin = is_admin(&session);
     let avatar_cards = render_avatar_cards(&active_state, uid, locale);
     let weapon_cards = render_weapon_cards(&active_state, uid, locale);
-    let equip_cards = render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale);
+    let equip_cards = render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale, filter_set_id, filter_slot, filter_main_stat, query.status.as_deref(), filter_page);
     let bangboo_cards = render_bangboo_cards(&active_state, uid, locale);
     let server_host = headers
         .get(header::HOST)
@@ -251,6 +271,7 @@ async fn dashboard(
         .lang-select {{ display: none; }}
         .menu-button {{ display: inline-flex; flex: 0 0 auto; }}
         .desktop-tabs {{ display: none; }}
+        .desktop-logout {{ display: none; }}
         .container {{ padding: 14px; }}
         .cards {{ grid-template-columns: 1fr; }}
         .row {{ grid-template-columns: 1fr; }}
@@ -287,6 +308,7 @@ async fn dashboard(
         <div class="lang-select">{lang_selector}</div>
         <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta}</a>
         <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod}</a>
+        <a href="/logout" class="desktop-logout" style="padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
         <form method="post" action="/apply" style="margin:0;">
             <input type="hidden" name="session" value="{session_id}" />
             <button class="apply" type="submit">{apply_changes} ({pending_count})</button>
@@ -309,6 +331,7 @@ async fn dashboard(
             <a href="{switch_beta_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
             <a href="{switch_prod_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
         </div>
+        <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
     </div>
 </aside>
 <main class="content">
@@ -352,6 +375,7 @@ async fn dashboard(
         apply_changes = t(locale, "header.apply_changes"),
         header_beta = t(locale, "header.beta"),
         header_prod = t(locale, "header.prod"),
+        logout_label = t(locale, "header.logout"),
         beta_active = if current_mode == ServerMode::Beta {
             "background:#4c7dff;color:#fff;"
         } else {

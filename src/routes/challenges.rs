@@ -56,7 +56,7 @@ pub(crate) async fn da_shiyu_update(
     session.pending_writes.insert(hadal_path, serialized);
     set_session(session_id, session);
 
-    Redirect::to("/dashboard?tab=da-shiyu").into_response()
+    Redirect::to("/dashboard?tab=shiyu").into_response()
 }
 
 fn element_icon_path(element: &str) -> &'static str {

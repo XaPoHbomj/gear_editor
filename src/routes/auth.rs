@@ -3,9 +3,10 @@ use crate::{
     app_state::{ServerMode, parse_server_mode},
     auth::{
         get_session, html_escape_attr, html_escape_text, insert_session, redirect_to_login,
-        sanitize_next_path, set_session, url_encode_component, validate_login,
+        remove_session, sanitize_next_path, set_session, url_encode_component, validate_login,
     },
     i18n::{Locale, locale_from_headers, t},
+    utils::audit_log,
 };
 use axum::{
     extract::{Form, OriginalUri, Query, State},
@@ -36,7 +37,11 @@ pub(crate) struct SwitchServerQuery {
 pub(crate) async fn login_page(
     Query(query): Query<LoginQuery>,
     headers: HeaderMap,
-) -> Html<String> {
+) -> impl IntoResponse {
+    if get_session(&headers).is_some() {
+        return Redirect::to("/dashboard").into_response();
+    }
+
     let locale = locale_from_headers(&headers);
     let next = query
         .next
@@ -44,7 +49,7 @@ pub(crate) async fn login_page(
         .and_then(sanitize_next_path)
         .unwrap_or_else(|| "/dashboard".to_string());
     let error = query.error.as_deref().filter(|e| !e.is_empty());
-    Html(render_login_form(locale, &next, error))
+    Html(render_login_form(locale, &next, error)).into_response()
 }
 
 fn render_login_form(locale: Locale, next: &str, error: Option<&str>) -> String {
@@ -113,12 +118,21 @@ pub(crate) async fn login(
     let username = payload.username.trim().to_string();
     let response: Response = match validate_login(&state.db_path, &username, &payload.password) {
         Ok(Some(session)) => {
+            let uid = session.uid;
             let session_id = insert_session(session);
+
+            audit_log(
+                &state.root_dir,
+                &username,
+                uid,
+                "login",
+                "successful login",
+            );
 
             let mut headers = HeaderMap::new();
             headers.insert(
                 header::SET_COOKIE,
-                format!("ge_session={}; HttpOnly; SameSite=Lax; Path=/", session_id)
+                format!("ge_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800", session_id)
                     .parse()
                     .unwrap(),
             );
@@ -192,5 +206,31 @@ pub(crate) async fn switch_server(
             .insert(header::SET_COOKIE, header_value);
     }
 
+    response
+}
+
+pub(crate) async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let mut response = Redirect::to("/").into_response();
+
+    if let Some((session_id, session)) = get_session(&headers) {
+        audit_log(
+            &state.root_dir,
+            &session.username,
+            session.uid,
+            "logout",
+            "session ended",
+        );
+        remove_session(&session_id);
+    }
+
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        "ge_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+            .parse()
+            .unwrap(),
+    );
     response
 }

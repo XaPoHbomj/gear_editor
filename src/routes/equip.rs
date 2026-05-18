@@ -17,7 +17,7 @@ use crate::{
         parse_slot_value, read_next_uid, render_equip_substat_script, render_slot_options,
         render_stat_select_options, render_sub_stat_rows, resolve_player_uid,
     },
-    utils::svg_data_uri,
+    utils::{audit_log, shared_page_css, svg_data_uri},
     zon::{
         ZValue, format_zon_pretty, read_zon, zon_get_bool, zon_get_main_property, zon_get_number,
         zon_get_sub_properties_list, zon_serialize, zon_set_bool, zon_set_main_property,
@@ -147,19 +147,7 @@ pub(crate) async fn equip_edit(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{edit_title}</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-    .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-    input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
-    label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
-    button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-    .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-    .row > * {{ min-width: 0; }}
-        .hero {{ display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }}
-        .hero img {{ width: 120px; height: 120px; border-radius: 12px; object-fit: cover; border: 1px solid #2a3140; background: #0f1115; }}
-        .hero h1 {{ margin: 0; }}
-        .meta {{ color: #9aa4b2; font-size: 12px; }}
-  </style>
+  <style>{shared_css}</style>
 </head>
 <body>
   <div class="container">
@@ -225,6 +213,7 @@ pub(crate) async fn equip_edit(
         stat_label_str = t(locale, "disc.stat"),
         sub_stats_heading = t(locale, "disc.sub_stats"),
         save_label = t(locale, "disc.save"),
+        shared_css = shared_page_css(),
         lang = locale.lang_attr(),
     );
 
@@ -405,22 +394,7 @@ pub(crate) async fn equip_new(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{new_title}</title>
-    <style>
-        body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-        .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
-        label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
-        button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-        .row > * {{ min-width: 0; }}
-        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 0 8px; }}
-        @media (max-width: 768px) {{
-            .container {{ padding: 14px; }}
-            .row {{ grid-template-columns: 1fr; }}
-            button {{ width: 100%; }}
-            .preview-img {{ width: 100%; }}
-        }}
-    </style>
+    <style>{shared_css}</style>
 </head>
 <body>
     <div class="container">
@@ -485,6 +459,7 @@ pub(crate) async fn equip_new(
         main_stat_heading = main_stat_heading,
         sub_stats_heading = sub_stats_heading,
         create_label = create_label,
+        shared_css = shared_page_css(),
         lang = lang,
     );
 
@@ -622,6 +597,7 @@ pub(crate) async fn equip_add(
             .into_response();
     }
 
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_add", &format!("created disc {}", new_uid));
     set_session(session_id, session);
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -669,18 +645,7 @@ pub(crate) async fn equip_generate(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{gen_title}</title>
-    <style>
-        body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-        .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input[type="number"], select {{ width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
-        label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
-        button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-        .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-        .row > * {{ min-width: 0; }}
-        .meta {{ color: #9aa4b2; font-size: 12px; }}
-        .preview-img {{ display: none; width: 33.33%; aspect-ratio: 1/1; object-fit: contain; border-radius: 8px; border: 1px solid #2a3140; background: #0f1115; margin: 0 0 8px; }}
-        @media (max-width: 768px) {{ .preview-img {{ width: 100%; }} }}
-    </style>
+    <style>{shared_css}</style>
 </head>
 <body>
     <div class="container">
@@ -730,6 +695,7 @@ pub(crate) async fn equip_generate(
         slot_label = slot_label,
         count_label = count_label,
         gen_btn = gen_btn,
+        shared_css = shared_page_css(),
         lang = lang,
     );
 
@@ -800,6 +766,7 @@ pub(crate) async fn equip_generate_submit(
             .into_response();
     }
 
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_generate", &format!("generated {} discs", payload.count));
     set_session(session_id, session);
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -819,6 +786,8 @@ pub(crate) async fn equip_delete_submit(
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
     let selected = parse_selected_equip_uids(&raw_form_text);
 
+    let mut deleted = Vec::new();
+
     for equip_uid in selected {
         let primary_path = state
             .state_dir
@@ -832,6 +801,8 @@ pub(crate) async fn equip_delete_submit(
         if locked {
             continue;
         }
+
+        deleted.push(equip_uid);
 
         let zon_path = state
             .state_dir
@@ -848,6 +819,7 @@ pub(crate) async fn equip_delete_submit(
         session.pending_writes.remove(&zon_path);
     }
 
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete", &format!("deleted {} discs", deleted.len()));
     set_session(session_id, session);
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -864,6 +836,8 @@ pub(crate) async fn equip_delete_all_unlocked(
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
+
+    let mut deleted = 0u32;
 
     if let Ok(entries) = fs::read_dir(&equip_dir) {
         for entry in entries.flatten() {
@@ -883,10 +857,12 @@ pub(crate) async fn equip_delete_all_unlocked(
                 }
                 session.pending_writes.remove(&path);
                 session.pending_writes.remove(&zon_path);
+                deleted += 1;
             }
         }
     }
 
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete_all_unlocked", &format!("deleted {} unlocked discs", deleted));
     set_session(session_id, session);
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -1057,6 +1033,11 @@ pub(crate) fn render_equip_cards(
     delete_mode: bool,
     lock_mode: bool,
     locale: Locale,
+    filter_set_id: Option<u32>,
+    filter_slot: Option<u32>,
+    filter_main_stat: Option<u32>,
+    filter_status: Option<&str>,
+    page: u32,
 ) -> String {
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let equip_templates = load_equip_templates(&state.asset_dir);
@@ -1199,17 +1180,53 @@ pub(crate) fn render_equip_cards(
                     lock_icon = lock_icon
                 )
             };
-            cards_data.push((equip_item_id, equip_uid, card_html));
+            cards_data.push((equip_item_id, equip_uid, card_html, set_id, slot, main_stat.0, locked));
         }
     }
 
-    cards_data.sort_by_key(|(equip_item_id, equip_uid, _)| (*equip_item_id, *equip_uid));
+    cards_data.retain(|(_, _, _, set_id, slot, main_stat_key, locked)| {
+        if let Some(fid) = filter_set_id {
+            if *set_id != fid {
+                return false;
+            }
+        }
+        if let Some(fs) = filter_slot {
+            if *slot != fs {
+                return false;
+            }
+        }
+        if let Some(fm) = filter_main_stat {
+            if *main_stat_key != fm {
+                return false;
+            }
+        }
+        match filter_status {
+            Some("locked") if !locked => return false,
+            Some("unlocked") if *locked => return false,
+            _ => {}
+        }
+        true
+    });
+
+    cards_data.sort_by_key(|(equip_item_id, equip_uid, _, _, _, _, _)| (*equip_item_id, *equip_uid));
+    let total = cards_data.len();
+
+    let per_page: usize = 50;
+    let total_pages = if total == 0 { 1 } else { (total + per_page - 1) / per_page };
+    let page = page.clamp(1, total_pages as u32);
+    let start = ((page - 1) as usize) * per_page;
+    let end = total.min(start + per_page);
+    let page_cards: Vec<_> = cards_data.drain(start..end).collect();
+
     let mut cards = String::new();
-    for (_, _, card_html) in cards_data {
+    for (_, _, card_html, _, _, _, _) in page_cards {
         cards.push_str(&card_html);
     }
 
-    if cards.is_empty() {
+    let filter_panel = if !delete_mode && !lock_mode { render_disc_filter_panel(state, locale, filter_set_id, filter_slot, filter_main_stat, filter_status) } else { String::new() };
+    let pagination_html = if total_pages > 1 { render_pagination(locale, page, total_pages as u32, filter_set_id, filter_slot, filter_main_stat, filter_status, total) } else { String::new() };
+
+    if cards.is_empty() && total == 0 {
         cards.push_str(&format!(
             "<p class=\"meta\">{}</p>",
             t(locale, "disc.no_discs")
@@ -1227,8 +1244,9 @@ pub(crate) fn render_equip_cards(
             t(locale, "disc.cancel"),
         );
         format!(
-            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}<div class=\"cards\">{cards}</div></form>",
+            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
             t(locale, "disc.delete_selected"),
+            pagination_html = pagination_html,
         )
     } else if lock_mode {
         let lock_panel = format!(
@@ -1238,10 +1256,11 @@ pub(crate) fn render_equip_cards(
             t(locale, "disc.cancel"),
         );
         format!(
-            "{add_panel}<form class=\"lock-form\" method=\"post\">{lock_panel}<div class=\"cards\">{cards}</div></form>",
+            "{add_panel}<form class=\"lock-form\" method=\"post\">{lock_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
+            pagination_html = pagination_html,
         )
     } else {
-        format!("{add_panel}<div class=\"cards\">{cards}</div>")
+        format!("{add_panel}{filter_panel}<div class=\"cards\">{cards}</div>{pagination_html}")
     }
 }
 
@@ -1328,4 +1347,180 @@ fn render_disc_select_options(state: &AppState, selected_id: u32, locale: Locale
         ));
     }
     html
+}
+
+fn render_disc_filter_panel(
+    state: &AppState,
+    locale: Locale,
+    filter_set_id: Option<u32>,
+    filter_slot: Option<u32>,
+    filter_main_stat: Option<u32>,
+    filter_status: Option<&str>,
+) -> String {
+    let set_opts = {
+        let hakushin = load_hakushin_data(state, locale);
+        let equip_index = load_equip_template_index(&state.asset_dir);
+        let known_sets: std::collections::HashSet<u32> = equip_index
+            .by_suit_slot
+            .keys()
+            .map(|(set_id, _)| *set_id)
+            .collect();
+        let mut items: Vec<(u32, String)> = hakushin
+            .discs
+            .iter()
+            .filter(|(id, _)| known_sets.contains(id))
+            .map(|(id, entry)| (*id, entry.name.clone()))
+            .collect();
+        items.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut html = format!("<option value=\"\">{}</option>", t(locale, "disc.filter_all"));
+        for (id, name) in items {
+            let sel = if filter_set_id == Some(id) { " selected" } else { "" };
+            html.push_str(&format!("<option value=\"{}\"{}>{}</option>", id, sel, name));
+        }
+        html
+    };
+
+    let slot_opts = {
+        let mut html = format!("<option value=\"\">{}</option>", t(locale, "disc.filter_all"));
+        for s in 1..=6 {
+            let sel = if filter_slot == Some(s) { " selected" } else { "" };
+            html.push_str(&format!("<option value=\"{}\"{}>{} {}</option>", s, sel, t(locale, "slot"), s));
+        }
+        html
+    };
+
+    let main_stat_opts = {
+        let mut html = format!("<option value=\"\">{}</option>", t(locale, "disc.filter_all"));
+        let all_keys: &[u32] = &[
+            11103, 12103, 13103,
+            11102, 12102, 13102,
+            20103, 21103,
+            31203, 23202,
+            31402, 12202,
+            30502,
+            31503, 31603,
+            31703, 31803, 31903,
+        ];
+        for &key in all_keys {
+            let label = stat_label(state, locale, key);
+            let sel = if filter_main_stat == Some(key) { " selected" } else { "" };
+            html.push_str(&format!("<option value=\"{}\"{}>{}</option>", key, sel, label));
+        }
+        html
+    };
+
+    let status_opts = {
+        let all_sel = if filter_status.is_none() || filter_status == Some("") { " selected" } else { "" };
+        let locked_sel = if filter_status == Some("locked") { " selected" } else { "" };
+        let unlocked_sel = if filter_status == Some("unlocked") { " selected" } else { "" };
+        format!(
+            "<option value=\"\"{}>{}</option><option value=\"locked\"{}>{}</option><option value=\"unlocked\"{}>{}</option>",
+            all_sel, t(locale, "disc.filter_all"),
+            locked_sel, t(locale, "disc.filter_locked"),
+            unlocked_sel, t(locale, "disc.filter_unlocked"),
+        )
+    };
+
+    format!(
+        r#"<form method="get" action="/dashboard" style="margin-bottom:12px;">
+            <input type="hidden" name="tab" value="discs" />
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{set_label}</span>
+                    <select name="set_id" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{set_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{slot_label}</span>
+                    <select name="slot" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{slot_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{main_stat_label}</span>
+                    <select name="main_stat" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{main_stat_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{status_label}</span>
+                    <select name="status" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{status_opts}</select>
+                </div>
+            </div>
+        </form>"#,
+        set_label = t(locale, "disc.filter_set"),
+        slot_label = t(locale, "disc.filter_slot"),
+        main_stat_label = t(locale, "disc.filter_main_stat"),
+        status_label = t(locale, "disc.filter_status"),
+    )
+}
+
+fn render_pagination(
+    locale: Locale,
+    page: u32,
+    total_pages: u32,
+    filter_set_id: Option<u32>,
+    filter_slot: Option<u32>,
+    filter_main_stat: Option<u32>,
+    filter_status: Option<&str>,
+    total: usize,
+) -> String {
+    let showing_label = t(locale, "disc.showing");
+    let page_label = t(locale, "disc.page");
+    let prev_label = t(locale, "disc.prev");
+    let next_label = t(locale, "disc.next");
+
+    let per_page: usize = 50;
+    let start = ((page - 1) as usize) * per_page + 1;
+    let end = total.min(start + per_page - 1);
+
+    let mut filter_params = String::from("tab=discs");
+    if let Some(s) = filter_set_id {
+        filter_params.push_str(&format!("&set_id={}", s));
+    }
+    if let Some(s) = filter_slot {
+        filter_params.push_str(&format!("&slot={}", s));
+    }
+    if let Some(m) = filter_main_stat {
+        filter_params.push_str(&format!("&main_stat={}", m));
+    }
+    if let Some(st) = filter_status {
+        if !st.is_empty() {
+            filter_params.push_str(&format!("&status={}", st));
+        }
+    }
+
+    let prev_link = if page > 1 {
+        format!(
+            "<a href=\"/dashboard?{}&page={}\" style=\"padding:6px 12px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;\">{}</a>",
+            filter_params, page - 1, prev_label,
+        )
+    } else {
+        format!(
+            "<span style=\"padding:6px 12px; border-radius:8px; background:#1b2230; color:#5a6474; font-size:12px; font-weight:600;\">{}</span>",
+            prev_label,
+        )
+    };
+
+    let next_link = if page < total_pages {
+        format!(
+            "<a href=\"/dashboard?{}&page={}\" style=\"padding:6px 12px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;\">{}</a>",
+            filter_params, page + 1, next_label,
+        )
+    } else {
+        format!(
+            "<span style=\"padding:6px 12px; border-radius:8px; background:#1b2230; color:#5a6474; font-size:12px; font-weight:600;\">{}</span>",
+            next_label,
+        )
+    };
+
+    format!(
+        "<div style=\"display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; flex-wrap:wrap;\">
+            <span class=\"meta\">{showing} {start}&ndash;{end} / {total}</span>
+            <div style=\"display:flex; gap:6px; align-items:center;\">
+                {prev_link}
+                <span style=\"font-size:12px; color:#9aa4b2;\">{page_label} {page}/{total_pages}</span>
+                {next_link}
+            </div>
+        </div>",
+        showing = showing_label,
+        total = total,
+        page_label = page_label,
+        total_pages = total_pages,
+    )
 }

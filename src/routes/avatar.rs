@@ -10,7 +10,7 @@ use crate::{
     },
     i18n::{Locale, locale_from_headers, t},
     player_state::{parse_slot_value, resolve_item_path, resolve_player_uid},
-    utils::svg_data_uri,
+    utils::{audit_log, shared_page_css, svg_data_uri},
     zon::{
         format_zon_pretty, read_zon, read_zon_verbose, zon_get_array_numbers, zon_get_number,
         zon_get_skill_levels, zon_serialize, zon_set_dressed_equip, zon_set_number,
@@ -95,19 +95,7 @@ pub(crate) async fn avatar_edit(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{avatar_edit_title}</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-    .container {{ padding: 24px; max-width: 900px; margin: 0 auto; }}
-        input, select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
-    label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
-    button {{ margin-top: 16px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
-    .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-    .row > * {{ min-width: 0; }}
-        .hero {{ display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }}
-        .hero img {{ width: 120px; height: 120px; border-radius: 12px; object-fit: cover; object-position: top; border: 1px solid #2a3140; background: #0f1115; }}
-        .hero h1 {{ margin: 0; }}
-        .meta {{ color: #9aa4b2; font-size: 12px; }}
-  </style>
+  <style>{shared_css}</style>
 </head>
 <body>
   <div class="container">
@@ -164,6 +152,7 @@ pub(crate) async fn avatar_edit(
         save_label = t(locale, "avatar.save"),
         id_label = t(locale, "avatar.id"),
         avatar_edit_title = t(locale, "avatar.edit"),
+        shared_css = shared_page_css(),
     );
     Html(body).into_response()
 }
@@ -470,6 +459,8 @@ pub(crate) async fn avatar_add_all(
             }
         }
     }
+
+    audit_log(&active_state.root_dir, &session.username, session.uid, "avatar_add_all", "added all missing agents");
 
     Redirect::to("/dashboard?tab=avatars").into_response()
 }

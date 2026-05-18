@@ -11,6 +11,7 @@ use std::{
     collections::HashMap,
     path::{Path as FsPath, PathBuf},
     sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 static SESSION_STORE: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
@@ -27,6 +28,7 @@ pub(crate) struct Session {
     pub(crate) uid: i32,
     pub(crate) username: String,
     pub(crate) pending_writes: HashMap<PathBuf, String>,
+    pub(crate) last_active: Instant,
 }
 
 pub(crate) fn validate_login(
@@ -58,6 +60,7 @@ pub(crate) fn validate_login(
             uid,
             username,
             pending_writes: HashMap::new(),
+            last_active: Instant::now(),
         }))
     } else {
         Ok(None)
@@ -76,12 +79,14 @@ pub(crate) fn get_session(headers: &HeaderMap) -> Option<(String, Session)> {
     let session_id = cookie_value(headers, "ge_session")?;
 
     let store = SESSION_STORE.get_or_init(|| Mutex::new(HashMap::new()));
-    store
-        .lock()
-        .unwrap()
-        .get(&session_id)
-        .cloned()
-        .map(|s| (session_id, s))
+    let mut sessions = store.lock().unwrap();
+    if let Some(mut session) = sessions.get(&session_id).cloned() {
+        session.last_active = Instant::now();
+        sessions.insert(session_id.clone(), session.clone());
+        Some((session_id, session))
+    } else {
+        None
+    }
 }
 
 pub(crate) fn get_session_mut(headers: &HeaderMap) -> Option<(String, Session)> {
@@ -135,6 +140,15 @@ pub(crate) fn html_escape_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+pub(crate) fn gc_sessions(max_age: Duration) -> usize {
+    let store = SESSION_STORE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut sessions = store.lock().unwrap();
+    let before = sessions.len();
+    sessions.retain(|_, s| s.last_active.elapsed() < max_age);
+
+    before - sessions.len()
+}
+
 pub(crate) fn redirect_to_login(original_uri: &axum::http::Uri) -> Response {
     let attempted = original_uri
         .path_and_query()
@@ -143,6 +157,11 @@ pub(crate) fn redirect_to_login(original_uri: &axum::http::Uri) -> Response {
     let next = sanitize_next_path(attempted).unwrap_or_else(|| "/dashboard".to_string());
     let location = format!("/?next={}", url_encode_component(&next));
     Redirect::to(&location).into_response()
+}
+
+pub(crate) fn remove_session(session_id: &str) {
+    let store = SESSION_STORE.get_or_init(|| Mutex::new(HashMap::new()));
+    store.lock().unwrap().remove(session_id);
 }
 
 pub(crate) fn is_admin(session: &Session) -> bool {
