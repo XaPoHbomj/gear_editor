@@ -537,7 +537,7 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
     }
 
     if cards.is_empty() {
-        cards.push_str("<p class=\"meta\">{no_data}</p>");
+        cards.push_str(&format!("<p class=\"meta\">{}</p>", t(locale, "da.no_data")));
     }
 
     format!("<div class=\"cards\">{cards}</div>")
@@ -647,7 +647,7 @@ pub(crate) fn render_shiyu_panel(state: &AppState, uid: u32, locale: Locale) -> 
     }
 
     if cards.is_empty() {
-        cards.push_str("<p class=\"meta\">{no_data}</p>");
+        cards.push_str(&format!("<p class=\"meta\">{}</p>", t(locale, "shiyu.no_data")));
     }
 
     format!("<div class=\"cards\">{cards}</div>")

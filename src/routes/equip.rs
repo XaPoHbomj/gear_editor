@@ -9,8 +9,8 @@ use crate::{
         },
     },
     domain::discs::{
-        disk_main_base_value, disk_main_stat_options, disk_sub_base_value, disk_sub_stat_options,
-        normalize_disk_main_stat, stat_label,
+        all_main_stat_keys, disk_main_base_value, disk_main_stat_options, disk_sub_base_value,
+        disk_sub_stat_options, normalize_disk_main_stat, stat_label, validate_sub_stats,
     },
     i18n::{Locale, locale_from_headers, t},
     player_state::{
@@ -257,55 +257,11 @@ pub(crate) async fn equip_update(
     let main_base = disk_main_base_value(main_key).unwrap_or(0);
     zon_set_main_property(&mut equip_zon, main_key, main_base, 0);
 
-    let sub_keys = vec![
-        payload.sub_key_1,
-        payload.sub_key_2,
-        payload.sub_key_3,
-        payload.sub_key_4,
-    ];
-    let sub_procs = vec![
-        payload.sub_proc_1,
-        payload.sub_proc_2,
-        payload.sub_proc_3,
-        payload.sub_proc_4,
-    ];
-    let allowed_subs = disk_sub_stat_options(main_key);
-    let mut keys = Vec::new();
-    let mut base = Vec::new();
-    let mut add = Vec::new();
-    for idx in 0..sub_keys.len() {
-        let key = sub_keys[idx];
-        if key == 0 || !allowed_subs.contains(&key) || keys.contains(&key) {
-            continue;
-        }
-        let Some(stat_base) = disk_sub_base_value(key) else {
-            continue;
-        };
-        let mut procs = *sub_procs.get(idx).unwrap_or(&0);
-        if procs == 0 {
-            procs = 1;
-        }
-        if procs > 6 {
-            procs = 6;
-        }
-        keys.push(key);
-        base.push(stat_base);
-        add.push(procs);
-    }
-
-    let mut total_procs: u32 = add.iter().sum();
-    if total_procs > 9 {
-        for proc in add.iter_mut().rev() {
-            if total_procs <= 9 {
-                break;
-            }
-            let excess = total_procs - 9;
-            let reducible = proc.saturating_sub(1);
-            let reduce = excess.min(reducible);
-            *proc -= reduce;
-            total_procs -= reduce;
-        }
-    }
+    let (keys, base, add) = validate_sub_stats(
+        main_key,
+        &[payload.sub_key_1, payload.sub_key_2, payload.sub_key_3, payload.sub_key_4],
+        &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
+    );
 
     zon_set_sub_properties(&mut equip_zon, &keys, &base, &add);
 
@@ -512,55 +468,11 @@ pub(crate) async fn equip_add(
         ])]
     };
 
-    let sub_keys = vec![
-        payload.sub_key_1,
-        payload.sub_key_2,
-        payload.sub_key_3,
-        payload.sub_key_4,
-    ];
-    let sub_procs = vec![
-        payload.sub_proc_1,
-        payload.sub_proc_2,
-        payload.sub_proc_3,
-        payload.sub_proc_4,
-    ];
-    let allowed_subs = disk_sub_stat_options(main_key);
-    let mut keys = Vec::new();
-    let mut base = Vec::new();
-    let mut add = Vec::new();
-    for idx in 0..sub_keys.len() {
-        let key = sub_keys[idx];
-        if key == 0 || !allowed_subs.contains(&key) || keys.contains(&key) {
-            continue;
-        }
-        let Some(stat_base) = disk_sub_base_value(key) else {
-            continue;
-        };
-        let mut procs = *sub_procs.get(idx).unwrap_or(&0);
-        if procs == 0 {
-            procs = 1;
-        }
-        if procs > 6 {
-            procs = 6;
-        }
-        keys.push(key);
-        base.push(stat_base);
-        add.push(procs);
-    }
-
-    let mut total_procs: u32 = add.iter().sum();
-    if total_procs > 9 {
-        for proc in add.iter_mut().rev() {
-            if total_procs <= 9 {
-                break;
-            }
-            let excess = total_procs - 9;
-            let reducible = proc.saturating_sub(1);
-            let reduce = excess.min(reducible);
-            *proc -= reduce;
-            total_procs -= reduce;
-        }
-    }
+    let (keys, base, add) = validate_sub_stats(
+        main_key,
+        &[payload.sub_key_1, payload.sub_key_2, payload.sub_key_3, payload.sub_key_4],
+        &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
+    );
 
     let equip = ZValue::Object(vec![
         ("id".to_string(), ZValue::Number(item_id as i64)),
@@ -1391,16 +1303,7 @@ fn render_disc_filter_panel(
 
     let main_stat_opts = {
         let mut html = format!("<option value=\"\">{}</option>", t(locale, "disc.filter_all"));
-        let all_keys: &[u32] = &[
-            11103, 12103, 13103,
-            11102, 12102, 13102,
-            20103, 21103,
-            31203, 23202,
-            31402, 12202,
-            30502,
-            31503, 31603,
-            31703, 31803, 31903,
-        ];
+        let all_keys = all_main_stat_keys();
         for &key in all_keys {
             let label = stat_label(state, locale, key);
             let sel = if filter_main_stat == Some(key) { " selected" } else { "" };

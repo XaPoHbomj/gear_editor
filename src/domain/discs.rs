@@ -286,6 +286,65 @@ pub(crate) fn disk_sub_stat_options(main_key: u32) -> Vec<u32> {
     options
 }
 
+pub(crate) fn all_main_stat_keys() -> &'static [u32] {
+    &[
+        STAT_HP, STAT_ATK, STAT_DEF,
+        STAT_HP_PCT, STAT_ATK_PCT, STAT_DEF_PCT,
+        STAT_CRIT_RATE, STAT_CRIT_DMG,
+        STAT_ANOMALY_PROF, STAT_PEN_RATIO,
+        STAT_ANOMALY_MASTERY, STAT_IMPACT,
+        STAT_ENERGY_REGEN,
+        STAT_PHYSICAL_DMG, STAT_FIRE_DMG,
+        STAT_ICE_DMG, STAT_ELECTRIC_DMG, STAT_ETHER_DMG,
+    ]
+}
+
+pub(crate) fn validate_sub_stats(
+    main_key: u32,
+    sub_keys: &[u32; 4],
+    sub_procs: &[u32; 4],
+) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+    let allowed_subs = disk_sub_stat_options(main_key);
+    let mut keys = Vec::new();
+    let mut base = Vec::new();
+    let mut add = Vec::new();
+    for idx in 0..sub_keys.len() {
+        let key = sub_keys[idx];
+        if key == 0 || !allowed_subs.contains(&key) || keys.contains(&key) {
+            continue;
+        }
+        let Some(stat_base) = disk_sub_base_value(key) else {
+            continue;
+        };
+        let mut procs = *sub_procs.get(idx).unwrap_or(&0);
+        if procs == 0 {
+            procs = 1;
+        }
+        if procs > 6 {
+            procs = 6;
+        }
+        keys.push(key);
+        base.push(stat_base);
+        add.push(procs);
+    }
+
+    let mut total_procs: u32 = add.iter().sum();
+    if total_procs > 9 {
+        for proc in add.iter_mut().rev() {
+            if total_procs <= 9 {
+                break;
+            }
+            let excess = total_procs - 9;
+            let reducible = proc.saturating_sub(1);
+            let reduce = excess.min(reducible);
+            *proc -= reduce;
+            total_procs -= reduce;
+        }
+    }
+
+    (keys, base, add)
+}
+
 pub(crate) fn stat_label(state: &AppState, locale: Locale, key: u32) -> String {
     let label = disk_stat_label(locale, key);
     if !label.is_empty() {
