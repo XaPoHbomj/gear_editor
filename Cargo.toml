@@ -18,3 +18,9 @@ toml = "0.8"
 chrono = { version = "0.4", features = ["clock"] }
 fs2 = "0.4"
 tower-http = { version = "0.5", features = ["compression-gzip"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

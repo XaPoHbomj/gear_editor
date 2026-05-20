@@ -169,20 +169,11 @@ async fn dashboard(
     let current_mode = active_server_mode(&headers);
     let active_state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&active_state, session.uid);
-    let locale = locale_from_headers(&headers);
-
     let is_admin = is_admin(&session);
-    let avatar_cards = render_avatar_cards(&active_state, uid, locale);
-    let weapon_cards = render_weapon_cards(&active_state, uid, locale);
-    let equip_cards = render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale, filter_set_id, filter_slot, filter_main_stat, query.status.as_deref(), filter_page);
-    let bangboo_cards = render_bangboo_cards(&active_state, uid, locale);
     let server_host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("localhost:18080");
-    let updates_panel = render_client_updates_panel(&state, server_host, locale, is_admin);
-    let da_panel = render_da_panel(&active_state, uid, locale);
-    let shiyu_panel = render_shiyu_panel(&active_state, uid, locale);
 
     let pending_count = session.pending_writes.len();
     let locale = locale_from_headers(&headers);
@@ -356,13 +347,13 @@ async fn dashboard(
         tab_shiyu = if tab == "shiyu" { "active" } else { "" },
         tab_updates = if tab == "updates" { "active" } else { "" },
         content = match tab.as_str() {
-            "weapons" => weapon_cards,
-            "discs" => equip_cards,
-            "bangboos" => bangboo_cards,
-            "updates" => updates_panel,
-            "da" => da_panel,
-            "shiyu" => shiyu_panel,
-            _ => avatar_cards,
+            "weapons" => render_weapon_cards(&active_state, uid, locale),
+            "discs" => render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale, filter_set_id, filter_slot, filter_main_stat, query.status.as_deref(), filter_page),
+            "bangboos" => render_bangboo_cards(&active_state, uid, locale),
+            "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
+            "da" => render_da_panel(&active_state, uid, locale),
+            "shiyu" => render_shiyu_panel(&active_state, uid, locale),
+            _ => render_avatar_cards(&active_state, uid, locale),
         },
         session_id = session_id,
         username = session.username,
