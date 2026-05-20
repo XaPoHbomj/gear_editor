@@ -64,13 +64,13 @@ fn render_login_form(locale: Locale, next: &str, error: Option<&str>) -> String 
 
     format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
   <style>
-        body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; height: 100vh; margin: 0; }}
+        body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; margin: 0; }}
         form {{ background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 12px; }}
     h1 {{ font-size: 18px; margin: 0; }}
     .field {{ display: flex; flex-direction: column; gap: 6px; }}
@@ -78,7 +78,7 @@ fn render_login_form(locale: Locale, next: &str, error: Option<&str>) -> String 
     input {{ width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
     button {{ width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
         @media (max-width: 768px) {{
-            body {{ display: flex; align-items: center; justify-content: center; height: auto; min-height: 100vh; padding: 16px; box-sizing: border-box; }}
+            body {{ display: flex; align-items: center; justify-content: center; height: auto; min-height: 100vh; min-height: 100dvh; padding: 16px; box-sizing: border-box; }}
             form {{ width: 100%; max-width: 420px; margin: 0; box-sizing: border-box; }}
         }}
   </style>
@@ -106,6 +106,7 @@ fn render_login_form(locale: Locale, next: &str, error: Option<&str>) -> String 
         username_label = t(locale, "login.username"),
         password_label = t(locale, "login.password"),
         sign_in = t(locale, "login.sign_in"),
+        lang = locale.lang_attr(),
     )
 }
 
@@ -132,7 +133,7 @@ pub(crate) async fn login(
             let mut headers = HeaderMap::new();
             headers.insert(
                 header::SET_COOKIE,
-                format!("ge_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800", session_id)
+                format!("ge_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000", session_id)
                     .parse()
                     .unwrap(),
             );

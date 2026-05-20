@@ -907,7 +907,7 @@ pub(crate) async fn da_detail(
 
                 let html = format!(
                     r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -957,7 +957,8 @@ pub(crate) async fn da_detail(
 </div>
 </body>
 </html>"#,
-                da_name, id, t(locale, "da.back"), t(locale, "da.select"), t(locale, "common.id"), buff_cards, boss_cards
+                da_name, id, t(locale, "da.back"), t(locale, "da.select"), t(locale, "common.id"), buff_cards, boss_cards,
+                lang = locale.lang_attr()
                 );
 
                 return Html(html).into_response();
@@ -1177,7 +1178,7 @@ pub(crate) async fn shiyu_detail(
 
                 let html = format!(
                     r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -1226,7 +1227,8 @@ pub(crate) async fn shiyu_detail(
 </div>
 </body>
 </html>"#,
-                shiyu_name, id, t(locale, "shiyu.back"), t(locale, "shiyu.select"), t(locale, "common.id"), tab_html, buff_cards, fight_cards
+                shiyu_name, id, t(locale, "shiyu.back"), t(locale, "shiyu.select"), t(locale, "common.id"), tab_html, buff_cards, fight_cards,
+                lang = locale.lang_attr()
                 );
 
                 return Html(html).into_response();

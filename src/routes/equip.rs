@@ -1034,7 +1034,7 @@ pub(crate) fn render_equip_cards(
             let card_html = if delete_mode {
                 if locked {
                     format!(
-                        "<label class=\"card select-card locked\"><input type=\"checkbox\" disabled /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card locked\"><input type=\"checkbox\" disabled /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -1045,7 +1045,7 @@ pub(crate) fn render_equip_cards(
                     )
                 } else {
                     format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -1058,7 +1058,7 @@ pub(crate) fn render_equip_cards(
             } else if lock_mode {
                 if locked {
                     format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card locked\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,
@@ -1069,7 +1069,7 @@ pub(crate) fn render_equip_cards(
                     )
                 } else {
                     format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
+                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
                         uid = equip_uid,
                         name = html_escape_attr(&name),
                         level = level,

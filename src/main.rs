@@ -261,9 +261,14 @@ async fn dashboard(
     .apply {{ background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
     .pill {{ display: inline-block; padding: 4px 8px; background: #2a3140; border-radius: 999px; font-size: 12px; color: #9aa4b2; }}
         .danger {{ background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
-        .select-card {{ cursor: pointer; }}
+        .select-card {{ cursor: pointer; position: relative; }}
         .select-card input[type="checkbox"] {{ position: absolute; opacity: 0; pointer-events: none; }}
         .select-card.locked {{ opacity: 0.5; cursor: not-allowed; }}
+        .select-card .selection-outline {{ display: none; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; }}
+        .delete-form .select-card .selection-outline {{ border: 2px solid #ef4444; box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.18); }}
+        .lock-form .select-card .selection-outline {{ border: 2px solid #22c55e; box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.18); }}
+        .delete-form .select-card input:checked ~ .selection-outline {{ display: block; }}
+        .lock-form .select-card input:checked ~ .selection-outline {{ display: block; }}
         .delete-form .select-card:has(input:checked) {{ border-color: #ef4444; }}
         .lock-form .select-card:has(input:checked) {{ border-color: #22c55e; }}
         .mobile-overlay {{ display: none; }}

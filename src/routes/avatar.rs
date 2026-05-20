@@ -90,7 +90,7 @@ pub(crate) async fn avatar_edit(
 
     let body = format!(
         r#"<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -153,6 +153,7 @@ pub(crate) async fn avatar_edit(
         id_label = t(locale, "avatar.id"),
         avatar_edit_title = t(locale, "avatar.edit"),
         shared_css = shared_page_css(),
+        lang = locale.lang_attr(),
     );
     Html(body).into_response()
 }
