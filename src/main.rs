@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use std::{env, path::PathBuf};
+use tower_http::compression::CompressionLayer;
 
 mod app_state;
 mod assets;
@@ -126,6 +127,7 @@ async fn main() {
         .route("/apply", post(apply_changes))
         .route("/set-lang", get(set_language))
         .route("/assets/*path", get(asset_handler))
+        .layer(CompressionLayer::new())
         .with_state(state);
 
     let addr = env::var("GEAR_EDITOR_ADDR").unwrap_or_else(|_| "0.0.0.0:18080".to_string());

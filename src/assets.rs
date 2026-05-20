@@ -45,6 +45,7 @@ pub(crate) async fn asset_handler(
     };
 
     let content_type = content_type_for_path(&full_path);
+    let cache_control = cache_control_for_path(&full_path);
     let range_header = headers
         .get(header::RANGE)
         .and_then(|value| value.to_str().ok())
@@ -71,6 +72,7 @@ pub(crate) async fn asset_handler(
         return Response::builder()
             .status(StatusCode::PARTIAL_CONTENT)
             .header(header::CONTENT_TYPE, content_type)
+            .header(header::CACHE_CONTROL, cache_control)
             .header(header::ACCEPT_RANGES, "bytes")
             .header(
                 header::CONTENT_RANGE,
@@ -85,6 +87,7 @@ pub(crate) async fn asset_handler(
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, cache_control)
         .header(header::ACCEPT_RANGES, "bytes");
 
     builder = builder.header(header::CONTENT_LENGTH, file_len.to_string());
@@ -144,5 +147,12 @@ fn content_type_for_path(path: &FsPath) -> &'static str {
         "gif" => "image/gif",
         "svg" => "image/svg+xml",
         _ => "application/octet-stream",
+    }
+}
+
+fn cache_control_for_path(path: &FsPath) -> &'static str {
+    match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
+        "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" => "public, max-age=604800, immutable",
+        _ => "no-cache",
     }
 }

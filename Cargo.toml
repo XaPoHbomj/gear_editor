@@ -17,3 +17,4 @@ pbkdf2 = { version = "0.12", features = ["simple"] }
 toml = "0.8"
 chrono = { version = "0.4", features = ["clock"] }
 fs2 = "0.4"
+tower-http = { version = "0.5", features = ["compression-gzip"] }
