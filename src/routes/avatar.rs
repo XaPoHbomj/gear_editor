@@ -131,7 +131,10 @@ pub(crate) async fn avatar_edit(
         {skills}
       </div>
 
-      <button type="submit">{save_label}</button>
+      <div class="form-actions">
+        <a href="/dashboard?tab=avatars" class="back">{back_label}</a>
+        <button type="submit">{save_label}</button>
+      </div>
     </form>
   </div>
 </body>
@@ -150,6 +153,7 @@ pub(crate) async fn avatar_edit(
         equipped_discs_label = t(locale, "avatar.equipped_discs"),
         skill_levels_label = t(locale, "avatar.skill_levels"),
         save_label = t(locale, "avatar.save"),
+        back_label = t(locale, "avatar.back"),
         id_label = t(locale, "avatar.id"),
         avatar_edit_title = t(locale, "avatar.edit"),
         shared_css = shared_page_css(),

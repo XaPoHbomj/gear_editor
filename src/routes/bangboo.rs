@@ -108,7 +108,10 @@ pub(crate) async fn bangboo_edit(
                 {skills}
             </div>
 
-            <button type="submit">{save_label}</button>
+            <div class="form-actions">
+                <a href="/dashboard?tab=bangboos" class="back">{back_label}</a>
+                <button type="submit">{save_label}</button>
+            </div>
         </form>
     </div>
 </body>
@@ -126,6 +129,7 @@ pub(crate) async fn bangboo_edit(
         skill_label = skill_label,
         save_label = save_label,
         uid_label = uid_label,
+        back_label = t(locale, "bangboo.back"),
         shared_css = shared_page_css(),
     );
 

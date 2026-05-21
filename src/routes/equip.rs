@@ -180,7 +180,10 @@ pub(crate) async fn equip_edit(
         {script}
       {warning}
 
-      <button type="submit">{save_label}</button>
+      <div class="form-actions">
+        <a href="/dashboard?tab=discs" class="back">{back_label}</a>
+        <button type="submit">{save_label}</button>
+      </div>
     </form>
   </div>
 </body>
@@ -213,6 +216,7 @@ pub(crate) async fn equip_edit(
         stat_label_str = t(locale, "disc.stat"),
         sub_stats_heading = t(locale, "disc.sub_stats"),
         save_label = t(locale, "disc.save"),
+        back_label = t(locale, "disc.back"),
         shared_css = shared_page_css(),
         lang = locale.lang_attr(),
     );

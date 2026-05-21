@@ -90,7 +90,10 @@ pub(crate) async fn weapon_edit(
       <input name="level" type="number" min="1" value="{level}" />
       <label>{overclock_label}</label>
       <input name="refine_level" type="number" min="0" value="{refine_level}" />
-      <button type="submit">{save_label}</button>
+      <div class="form-actions">
+        <a href="/dashboard?tab=weapons" class="back">{back_label}</a>
+        <button type="submit">{save_label}</button>
+      </div>
     </form>
   </div>
 </body>
@@ -107,6 +110,7 @@ pub(crate) async fn weapon_edit(
         level_label = t(locale, "weapon.level"),
         overclock_label = t(locale, "weapon.overclock"),
         save_label = t(locale, "weapon.save"),
+        back_label = t(locale, "weapon.back"),
         lang = locale.lang_attr(),
         shared_css = shared_page_css(),
     );

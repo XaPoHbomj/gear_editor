@@ -42,9 +42,12 @@ pub(crate) fn shared_page_css() -> &'static str {
      .hero{display:flex;gap:16px;align-items:center;margin-bottom:16px}\
      .hero img{width:120px;height:120px;border-radius:12px;object-fit:cover;object-position:top;border:1px solid #2a3140;background:#0f1115}\
      .hero h1{margin:0}\
-     .meta{color:#9aa4b2;font-size:12px}\
-     .preview-img{display:none;width:33.33%;aspect-ratio:1/1;object-fit:contain;border-radius:8px;border:1px solid #2a3140;background:#0f1115;margin:0 0 8px}\
-     @media(max-width:768px){.container{padding:14px}.row{grid-template-columns:1fr}button{width:100%}.hero{flex-direction:column;align-items:flex-start}.hero img{width:100%;max-width:240px;height:auto;aspect-ratio:1/1}.preview-img{width:100%}}"
+.meta{color:#9aa4b2;font-size:12px}\
+      .back{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:8px;background:#2a3140;color:#e6e6e6;text-decoration:none;font-weight:600}\
+      .form-actions{display:flex;justify-content:space-between;gap:12px;margin-top:16px}\
+      .form-actions button{margin-top:0}\
+      .preview-img{display:none;width:33.33%;aspect-ratio:1/1;object-fit:contain;border-radius:8px;border:1px solid #2a3140;background:#0f1115;margin:0 0 8px}\
+      @media(max-width:768px){.container{padding:14px}.row{grid-template-columns:1fr}button{width:100%}.hero{flex-direction:column;align-items:flex-start}.hero img{width:100%;max-width:240px;height:auto;aspect-ratio:1/1}.preview-img{width:100%}}"
 }
 
 pub(crate) async fn apply_changes(
