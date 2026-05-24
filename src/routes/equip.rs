@@ -71,6 +71,51 @@ pub(crate) struct GenerateEquipForm {
     count: u32,
 }
 
+const MAX_DISCS: usize = 500;
+
+fn count_equip_files(equip_dir: &std::path::Path) -> usize {
+    let Ok(entries) = fs::read_dir(equip_dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| n.parse::<u32>().is_ok())
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+fn render_error_page(error_label: &str, message: &str, locale: Locale) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="{lang}">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <style>{css}</style>
+</head>
+<body>
+    <div class="container">
+        <h1>{title}</h1>
+        <div class="panel" style="margin-top:16px;">
+            <div style="background:#3d1420;color:#fca5a5;border:1px solid #6b2136;padding:12px 16px;border-radius:8px;font-size:14px;">{message}</div>
+        </div>
+        <a href="/dashboard?tab=discs" class="back" style="margin-top:16px;">{back}</a>
+    </div>
+</body>
+</html>"#,
+        lang = locale.lang_attr(),
+        title = error_label,
+        css = shared_page_css(),
+        message = message,
+        back = t(locale, "disc.back"),
+    )
+}
+
 pub(crate) async fn equip_edit(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -440,6 +485,9 @@ pub(crate) async fn equip_add(
     let locale = locale_from_headers(&headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
+    if count_equip_files(&equip_dir) >= MAX_DISCS {
+        return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
+    }
     let next_uid = read_next_uid(&equip_dir).unwrap_or(1);
     let new_uid = next_uid.max(1);
     let equip_index = load_equip_template_index(&state.asset_dir);
@@ -641,11 +689,19 @@ pub(crate) async fn equip_generate_submit(
     let state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&state, session.uid);
     let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
+    let current_count = count_equip_files(&equip_dir);
+    if current_count >= MAX_DISCS {
+        return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
+    }
     let equip_index = load_equip_template_index(&state.asset_dir);
+    let count_to_gen = (payload.count as usize).min(MAX_DISCS - current_count);
+    if count_to_gen == 0 {
+        return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
+    }
     let mut next_uid = read_next_uid(&equip_dir).unwrap_or(1).max(1);
     let mut rng = rand::thread_rng();
 
-    for _ in 0..payload.count {
+    for _ in 0..count_to_gen {
         let equip = match generate_random_disc(
             payload.equip_set_id,
             selected_slot,
@@ -654,7 +710,7 @@ pub(crate) async fn equip_generate_submit(
             locale,
         ) {
             Ok(value) => value,
-            Err(message) => return (StatusCode::BAD_REQUEST, Html(message)).into_response(),
+            Err(message) => return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.failed_create_gen"), &message, locale))).into_response(),
         };
 
         let equip_path = equip_dir.join(next_uid.to_string());
@@ -682,7 +738,7 @@ pub(crate) async fn equip_generate_submit(
             .into_response();
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_generate", &format!("generated {} discs", payload.count));
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_generate", &format!("generated {} discs", count_to_gen));
     set_session(session_id, session);
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -1139,8 +1195,8 @@ pub(crate) fn render_equip_cards(
         cards.push_str(&card_html);
     }
 
-    let filter_panel = if !delete_mode && !lock_mode { render_disc_filter_panel(state, locale, filter_set_id, filter_slot, filter_main_stat, filter_status) } else { String::new() };
-    let pagination_html = if total_pages > 1 { render_pagination(locale, page, total_pages as u32, filter_set_id, filter_slot, filter_main_stat, filter_status, total) } else { String::new() };
+    let filter_panel = render_disc_filter_panel(state, locale, filter_set_id, filter_slot, filter_main_stat, filter_status, delete_mode, lock_mode);
+    let pagination_html = if total_pages > 1 { render_pagination(locale, page, total_pages as u32, filter_set_id, filter_slot, filter_main_stat, filter_status, total, delete_mode, lock_mode) } else { String::new() };
 
     if cards.is_empty() && total == 0 {
         cards.push_str(&format!(
@@ -1160,7 +1216,7 @@ pub(crate) fn render_equip_cards(
             t(locale, "disc.cancel"),
         );
         format!(
-            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
+            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}{filter_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
             t(locale, "disc.delete_selected"),
             pagination_html = pagination_html,
         )
@@ -1172,7 +1228,7 @@ pub(crate) fn render_equip_cards(
             t(locale, "disc.cancel"),
         );
         format!(
-            "{add_panel}<form class=\"lock-form\" method=\"post\">{lock_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
+            "{add_panel}<form class=\"lock-form\" method=\"post\">{lock_panel}{filter_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
             pagination_html = pagination_html,
         )
     } else {
@@ -1272,6 +1328,8 @@ fn render_disc_filter_panel(
     filter_slot: Option<u32>,
     filter_main_stat: Option<u32>,
     filter_status: Option<&str>,
+    delete_mode: bool,
+    lock_mode: bool,
 ) -> String {
     let set_opts = {
         let hakushin = load_hakushin_data(state, locale);
@@ -1328,9 +1386,66 @@ fn render_disc_filter_panel(
         )
     };
 
-    format!(
-        r#"<form method="get" action="/dashboard" style="margin-bottom:12px;">
+    let mode_hidden = if delete_mode {
+        "delete=1"
+    } else if lock_mode {
+        "lock=1"
+    } else {
+        ""
+    };
+    let mode_query = if mode_hidden.is_empty() {
+        String::new()
+    } else {
+        format!("&{mode_hidden}")
+    };
+
+    if delete_mode || lock_mode {
+        let current_set_id = filter_set_id.map(|v| v.to_string()).unwrap_or_default();
+        let current_slot = filter_slot.map(|v| v.to_string()).unwrap_or_default();
+        let current_main_stat = filter_main_stat.map(|v| v.to_string()).unwrap_or_default();
+        let current_status = filter_status.unwrap_or("").to_string();
+        format!(
+            r#"<div style="margin-bottom:12px;">
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{set_label}</span>
+                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id='+this.value+'&slot={current_slot}&main_stat={current_main_stat}&status={current_status}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{set_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{slot_label}</span>
+                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id={current_set_id}&slot='+this.value+'&main_stat={current_main_stat}&status={current_status}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{slot_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{main_stat_label}</span>
+                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id={current_set_id}&slot={current_slot}&main_stat='+this.value+'&status={current_status}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{main_stat_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{status_label}</span>
+                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id={current_set_id}&slot={current_slot}&main_stat={current_main_stat}&status='+this.value" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{status_opts}</select>
+                </div>
+            </div>
+        </div>"#,
+            set_label = t(locale, "disc.filter_set"),
+            slot_label = t(locale, "disc.filter_slot"),
+            main_stat_label = t(locale, "disc.filter_main_stat"),
+            status_label = t(locale, "disc.filter_status"),
+            mode_query = mode_query,
+            current_set_id = current_set_id,
+            current_slot = current_slot,
+            current_main_stat = current_main_stat,
+            current_status = current_status,
+        )
+    } else {
+        let hidden_input = if mode_hidden.is_empty() {
+            String::new()
+        } else {
+            format!("<input type=\"hidden\" name=\"{}\" value=\"1\" />", mode_hidden)
+        };
+
+        format!(
+            r#"<form method="get" action="/dashboard" style="margin-bottom:12px;">
             <input type="hidden" name="tab" value="discs" />
+            {hidden_input}
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <span style="font-size:11px; color:#9aa4b2;">{set_label}</span>
@@ -1350,11 +1465,13 @@ fn render_disc_filter_panel(
                 </div>
             </div>
         </form>"#,
-        set_label = t(locale, "disc.filter_set"),
-        slot_label = t(locale, "disc.filter_slot"),
-        main_stat_label = t(locale, "disc.filter_main_stat"),
-        status_label = t(locale, "disc.filter_status"),
-    )
+            set_label = t(locale, "disc.filter_set"),
+            slot_label = t(locale, "disc.filter_slot"),
+            main_stat_label = t(locale, "disc.filter_main_stat"),
+            status_label = t(locale, "disc.filter_status"),
+            hidden_input = hidden_input,
+        )
+    }
 }
 
 fn render_pagination(
@@ -1366,6 +1483,8 @@ fn render_pagination(
     filter_main_stat: Option<u32>,
     filter_status: Option<&str>,
     total: usize,
+    delete_mode: bool,
+    lock_mode: bool,
 ) -> String {
     let showing_label = t(locale, "disc.showing");
     let page_label = t(locale, "disc.page");
@@ -1377,6 +1496,12 @@ fn render_pagination(
     let end = total.min(start + per_page - 1);
 
     let mut filter_params = String::from("tab=discs");
+    if delete_mode {
+        filter_params.push_str("&delete=1");
+    }
+    if lock_mode {
+        filter_params.push_str("&lock=1");
+    }
     if let Some(s) = filter_set_id {
         filter_params.push_str(&format!("&set_id={}", s));
     }
