@@ -75,7 +75,9 @@ async fn main() {
     let prod_state_dir = env::var("GEAR_STATE_DIR_PROD")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("yoshunko_prod/state"));
-    let asset_dir = root.join("yoshunko/assets/Filecfg");
+    let asset_dir = env::var("GEAR_ASSET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("yoshunko/assets/Filecfg"));
     let prod_asset_dir = env::var("GEAR_ASSET_DIR_PROD")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("yoshunko_prod/assets/Filecfg"));
