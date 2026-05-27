@@ -129,6 +129,7 @@ const STAT_FIRE_DMG: u32 = 31603;
 const STAT_ICE_DMG: u32 = 31703;
 const STAT_ELECTRIC_DMG: u32 = 31803;
 const STAT_ETHER_DMG: u32 = 31903;
+const STAT_WIND_DMG: u32 = 32303;
 
 fn disk_stat_label(locale: Locale, key: u32) -> String {
     match key {
@@ -151,6 +152,7 @@ fn disk_stat_label(locale: Locale, key: u32) -> String {
         STAT_ICE_DMG => t(locale, "stat.ice_dmg").to_string(),
         STAT_ELECTRIC_DMG => t(locale, "stat.electric_dmg").to_string(),
         STAT_ETHER_DMG => t(locale, "stat.ether_dmg").to_string(),
+        STAT_WIND_DMG => t(locale, "stat.wind_dmg").to_string(),
         _ => String::new(),
     }
 }
@@ -177,6 +179,7 @@ pub(crate) fn disk_main_stat_options(slot: u32) -> Vec<u32> {
             STAT_FIRE_DMG,
             STAT_ELECTRIC_DMG,
             STAT_ETHER_DMG,
+            STAT_WIND_DMG,
             STAT_PEN_RATIO,
         ],
         6 => vec![
@@ -214,6 +217,7 @@ pub(crate) fn disk_main_base_value(key: u32) -> Option<u32> {
         STAT_PHYSICAL_DMG | STAT_ICE_DMG | STAT_FIRE_DMG | STAT_ELECTRIC_DMG | STAT_ETHER_DMG => {
             Some(750)
         }
+        STAT_WIND_DMG => Some(750),
         STAT_PEN_RATIO => Some(600),
         STAT_ANOMALY_MASTERY => Some(750),
         STAT_IMPACT => Some(450),
@@ -296,6 +300,7 @@ pub(crate) fn all_main_stat_keys() -> &'static [u32] {
         STAT_ENERGY_REGEN,
         STAT_PHYSICAL_DMG, STAT_FIRE_DMG,
         STAT_ICE_DMG, STAT_ELECTRIC_DMG, STAT_ETHER_DMG,
+        STAT_WIND_DMG,
     ]
 }
 
