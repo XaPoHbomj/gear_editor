@@ -2,7 +2,7 @@
 
 Web-based player profile/state editor for Zenless Zone Zero private servers.
 
-Reads and writes ZON-format state files directly on disk, shared with the [Yoshunko](https://github.com/...) game server — no sync layer, no API.
+Reads and writes ZON-format state files directly on disk, shared with the [Yoshunko](https://git.xeondev.com/yoshunko/yoshunko) game server — no sync layer, no API.
 
 ## Features
 
@@ -72,8 +72,8 @@ sequenceDiagram
 ### Prerequisites
 
 - Rust toolchain (nightly 2024 edition)
-- [hoyo-sdk](https://github.com/...) — provides the SQLite DB for login
-- [yoshunko](https://github.com/...) — provides state files to edit (optional; can edit standalone)
+- [hoyo-sdk](https://git.xeondev.com/reversedrooms/hoyo-sdk) — provides the SQLite DB for login
+- [yoshunko](https://git.xeondev.com/yoshunko/yoshunko) — provides state files to edit (optional; can edit standalone)
 
 ### Environment variables
 
