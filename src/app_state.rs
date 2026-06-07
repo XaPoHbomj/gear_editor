@@ -1,6 +1,6 @@
 use crate::i18n::Locale;
 use axum::http::{HeaderMap, header};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -24,6 +24,31 @@ impl AppState {
         };
         self.dump_dir.join(code)
     }
+
+    pub(crate) fn read_version(&self, prod: bool) -> String {
+        let dir = if prod { &self.prod_state_dir } else { &self.state_dir };
+        read_version_from_dir(dir)
+    }
+}
+
+pub(crate) fn read_version_from_dir(state_dir: &Path) -> String {
+    let ver_dir = state_dir.join("version");
+    let Ok(mut entries) = std::fs::read_dir(&ver_dir) else {
+        return String::new();
+    };
+    let Some(Ok(entry)) = entries.next() else {
+        return String::new();
+    };
+    let name = entry.file_name();
+    let name = match name.to_str() {
+        Some(n) => n,
+        None => return String::new(),
+    };
+    let start = match name.find(|c: char| c.is_ascii_digit()) {
+        Some(i) => i,
+        None => return String::new(),
+    };
+    name[start..].to_string()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

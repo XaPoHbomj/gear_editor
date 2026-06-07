@@ -171,6 +171,8 @@ async fn dashboard(
     let current_mode = active_server_mode(&headers);
     let active_state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&active_state, session.uid);
+    let beta_version = state.read_version(false);
+    let prod_version = state.read_version(true);
     let is_admin = is_admin(&session);
     let server_host = headers
         .get(header::HOST)
@@ -328,8 +330,8 @@ async fn dashboard(
         <div class="meta">{signed_in_as} {username}</div>
         {lang_selector}
         <div style="display:flex; gap:4px; width:100%;">
-            <a href="{switch_beta_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">Beta</a>
-            <a href="{switch_prod_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">Prod</a>
+            <a href="{switch_beta_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta_mobile}</a>
+            <a href="{switch_prod_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod_mobile}</a>
         </div>
         <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
     </div>
@@ -373,8 +375,22 @@ async fn dashboard(
         nav_client_updates = t(locale, "nav.client_updates"),
         signed_in_as = t(locale, "header.signed_in_as"),
         apply_changes = t(locale, "header.apply_changes"),
-        header_beta = t(locale, "header.beta"),
-        header_prod = t(locale, "header.prod"),
+        header_beta = {
+            let v = &beta_version;
+            if v.is_empty() { t(locale, "header.beta").to_string() } else { format!("{} {}", t(locale, "header.beta"), v) }
+        },
+        header_prod = {
+            let v = &prod_version;
+            if v.is_empty() { t(locale, "header.prod").to_string() } else { format!("{} {}", t(locale, "header.prod"), v) }
+        },
+        header_beta_mobile = {
+            let v = &beta_version;
+            if v.is_empty() { t(locale, "header.beta").to_string() } else { format!("{} {}", t(locale, "header.beta"), v) }
+        },
+        header_prod_mobile = {
+            let v = &prod_version;
+            if v.is_empty() { t(locale, "header.prod").to_string() } else { format!("{} {}", t(locale, "header.prod"), v) }
+        },
         logout_label = t(locale, "header.logout"),
         beta_active = if current_mode == ServerMode::Beta {
             "background:#4c7dff;color:#fff;"
