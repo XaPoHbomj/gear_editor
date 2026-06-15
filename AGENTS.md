@@ -143,5 +143,6 @@ Full design system documented in `BRANDBOOK.md` and `BRANDBOOK.html`.
 - **Use the same variable names** as existing code for consistency (e.g., `locale`, `state`, `active_state`, `hakushin`).
 - **The `t()` function** requires the locale from `locale_from_headers(&headers)`.
 - **Cache-aware**: `load_hakushin_data()` caches results; it's cheap to call multiple times.
+- **Patch files** (`updates.rs::find_update_file`) match by prefix (`vortex_patch_beta_` / `vortex_patch_prod_`) and pick the newest `.zip` — no hardcoded filenames.
 - **Never SCP/SSH** to remote without explicit permission.
 - **Commit messages** should follow the existing convention: short description, then blank line, then bullet points.

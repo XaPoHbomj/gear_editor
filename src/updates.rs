@@ -19,12 +19,12 @@ pub(crate) fn render_client_updates_panel(
 ) -> String {
     let beta_patch = find_update_file(
         &state.root_dir.join("client_updates/Beta/Patch"),
-        "tentacle_patch.zip",
+        "vortex_patch_beta_",
     );
     let beta_updates = list_update_files(&state.root_dir.join("client_updates/Beta/Update"));
     let prod_patch = find_update_file(
         &state.root_dir.join("client_updates/Prod/Patch"),
-        "tentacle_patch.zip",
+        "vortex_patch_prod_",
     );
 
     let beta_items = vec![
@@ -305,17 +305,7 @@ fn list_update_files(dir: &FsPath) -> Vec<UpdateFileInfo> {
     files
 }
 
-fn find_update_file(dir: &FsPath, preferred_name: &str) -> Option<UpdateFileInfo> {
-    let preferred_path = dir.join(preferred_name);
-    if let Ok(metadata) = fs::metadata(&preferred_path) {
-        return Some(UpdateFileInfo {
-            file_name: preferred_name.to_string(),
-            relative_path: path_to_asset_relative(&preferred_path)?,
-            size_bytes: metadata.len(),
-            modified: metadata.modified().ok(),
-        });
-    }
-
+fn find_update_file(dir: &FsPath, prefix: &str) -> Option<UpdateFileInfo> {
     let mut latest: Option<(PathBuf, fs::Metadata)> = None;
     let Ok(entries) = fs::read_dir(dir) else {
         return None;
@@ -324,6 +314,13 @@ fn find_update_file(dir: &FsPath, preferred_name: &str) -> Option<UpdateFileInfo
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
+            continue;
+        }
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        if !file_name.starts_with(prefix) {
             continue;
         }
         let Ok(metadata) = entry.metadata() else {
