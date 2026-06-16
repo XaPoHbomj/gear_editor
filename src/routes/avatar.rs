@@ -258,10 +258,12 @@ pub(crate) fn render_avatar_cards(state: &AppState, uid: u32, locale: Locale) ->
                     .map(to_asset_url)
                     .unwrap_or_else(|| svg_data_uri(&name));
                 cards.push_str(&format!(
-                    "<a class=\"card\" href=\"/avatar/{id}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">ID {id}</span><h3>{name}</h3><div class=\"meta\">Level {level}</div></a>",
+                    "<a class=\"card\" href=\"/avatar/{id}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{id_label} {id}</span><h3>{name}</h3><div class=\"meta\">{level_label} {level}</div></a>",
                     id = avatar_id,
                     name = html_escape_attr(&name),
                     level = level,
+                    id_label = t(locale, "avatar.id"),
+                    level_label = t(locale, "avatar.level"),
                     img = html_escape_attr(&img)
                 ));
             }
@@ -269,7 +271,7 @@ pub(crate) fn render_avatar_cards(state: &AppState, uid: u32, locale: Locale) ->
     }
 
     if cards.is_empty() {
-        cards.push_str("<p class=\"meta\">No characters found for this account.</p>");
+        cards.push_str(&format!("<p class=\"meta\">{}</p>", t(locale, "avatar.no_characters")));
     }
 
     let add_panel = render_add_avatar_panel(locale);

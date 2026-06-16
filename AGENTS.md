@@ -33,37 +33,41 @@ A `OnceLock<Mutex<HashMap<String, Session>>>` holds all active sessions. This is
 ## Project Structure
 
 ```
+scripts/
+├── auto_update_gear_editor.sh  # Cron-based auto-update (git pull + restart)
 gear_editor/
 ├── AGENTS.md           # This file
 ├── BRANDBOOK.md        # UI design documentation
 ├── BRANDBOOK.html      # Visual HTML reference of all UI elements
-├── Cargo.toml          # Dependencies: axum, tokio, serde, rusqlite, etc.
+├── Cargo.toml          # Dependencies: axum, tokio, serde, rusqlite, tower-http
+├── README.md           # Architecture and setup docs
 └── src/
-    ├── main.rs         # App bootstrap, Router setup, dashboard HTML template (~385 lines)
-    ├── app_state.rs    # AppState struct, ServerMode enum, cookie parsing
+    ├── main.rs         # App bootstrap, Router, dashboard HTML template (~430 lines)
+    ├── app_state.rs    # AppState, ServerMode, cookie parsing, version reading
     ├── auth.rs         # Session store, login validation, HTML escaping
     ├── config.rs       # SDK config loading (TOML)
-    ├── assets.rs       # Static file serving (range requests)
-    ├── i18n.rs         # 5-locale translation (~100 keys x 5 = 500 strings)
+    ├── assets.rs       # Static file serving (range requests, image caching)
+    ├── i18n.rs         # 5-locale translation (~107 keys x 5 = ~535 strings)
     ├── player_state.rs # UID resolution, next-uid counter, stat select rendering
     ├── updates.rs      # Client updates panel (patch/update file listing)
-    ├── utils.rs        # apply_changes handler, svg_data_uri helper
+    ├── utils.rs        # apply_changes handler, shared_page_css(), svg_data_uri helper
     ├── zon.rs          # ZON format parser/serializer (~744 lines)
-    ├���─ data/
+    ├── data/
     │   ├── mod.rs
     │   ├── hakushin.rs # Hakushin.gg dump data: char/weapon/disc/bangboo names + images
     │   └── templates.rs# Game template JSON loading (Avatar, Weapon, Equipment)
     ├── domain/
     │   ├── mod.rs
-    │   └── discs.rs    # Disc stat definitions, main/sub stat options, base values
+    │   └── discs.rs    # Disc stat definitions, main/sub stat options, base values, Wind
     └── routes/
         ├── mod.rs
         ├── auth.rs     # Login, login page, server switch
         ├── avatar.rs   # Character edit, update, card rendering, add-all
         ├── weapon.rs   # Weapon edit/new/update/add, card rendering
-        ├── equip.rs    # Disc edit/new/generate/delete/lock, card rendering
+        ├── equip.rs    # Disc edit/new/generate/delete/lock, card rendering, filter/pagination
         ├── bangboo.rs  # Bangboo edit, update, card rendering, add-all
-        └── challenges.rs # Deadly Assault & Shiyu detail panels
+        ├── challenges.rs # Deadly Assault & Shiyu detail panels
+        └── admin.rs    # Client update upload/delete
 ```
 
 ---
@@ -141,8 +145,9 @@ Full design system documented in `BRANDBOOK.md` and `BRANDBOOK.html`.
 - **Don't add comments** to code unless asked.
 - **All CSS is inline** in `main.rs` (dashboard) or inside each handler's `format!()` (sub-pages). There are no `.css` files.
 - **Use the same variable names** as existing code for consistency (e.g., `locale`, `state`, `active_state`, `hakushin`).
-- **The `t()` function** requires the locale from `locale_from_headers(&headers)`.
+- **The `t()` function** requires the locale from `locale_from_headers(&headers)`. All card labels (Level, Set, Slot, Main Stat, Sub Stats) use i18n keys — never hardcode "Level" or "ID" in format strings.
 - **Cache-aware**: `load_hakushin_data()` caches results; it's cheap to call multiple times.
 - **Patch files** (`updates.rs::find_update_file`) match by prefix (`vortex_patch_beta_` / `vortex_patch_prod_`) and pick the newest `.zip` — no hardcoded filenames.
+- **Version display**: `read_version_from_dir()` reads the first file in `{state_dir}/version/` and extracts everything from the first digit onward (e.g. `CNBetaWin3.0.3` → `3.0.3`). Versions are shown on Beta/Prod buttons in the header.
 - **Never SCP/SSH** to remote without explicit permission.
 - **Commit messages** should follow the existing convention: short description, then blank line, then bullet points.

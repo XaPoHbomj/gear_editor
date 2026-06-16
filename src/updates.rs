@@ -1,6 +1,6 @@
 use crate::{app_state::AppState, auth::html_escape_attr, i18n::Locale, i18n::t};
 use std::{
-    env, fs,
+    fs,
     path::{Path as FsPath, PathBuf},
 };
 
