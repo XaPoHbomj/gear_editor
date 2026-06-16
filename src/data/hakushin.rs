@@ -17,6 +17,13 @@ pub(crate) struct HakushinData {
     pub(crate) weapons: HashMap<u32, HakushinEntry>,
     pub(crate) discs: HashMap<u32, HakushinEntry>,
     pub(crate) bangboos: HashMap<u32, HakushinEntry>,
+    pub(crate) weapon_info: HashMap<u32, WeaponInfo>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct WeaponInfo {
+    pub(crate) weapon_type: String,
+    pub(crate) rarity: u32,
 }
 
 #[derive(Default, Clone)]
@@ -89,6 +96,7 @@ pub(crate) fn load_hakushin_data(state: &AppState, locale: Locale) -> HakushinDa
             "name",
             &["icon_local", "icon"],
         ),
+        weapon_info: load_weapon_info(&lang_dir.join("weapon_details.json")),
     };
 
     cache.insert(cache_key, data.clone());
@@ -102,6 +110,7 @@ fn hakushin_data_fingerprint(dump_dir: &FsPath) -> u64 {
         "weapons.json",
         "drive_discs.json",
         "bangboos.json",
+        "weapon_details.json",
     ] {
         let path = dump_dir.join(file_name);
         path.to_string_lossy().hash(&mut hasher);
@@ -157,6 +166,34 @@ fn load_hakushin_list(
         result.insert(id as u32, HakushinEntry { name, image_local });
     }
 
+    result
+}
+
+fn load_weapon_info(path: &FsPath) -> HashMap<u32, WeaponInfo> {
+    let mut result = HashMap::new();
+    let Ok(data) = fs::read_to_string(path) else {
+        return result;
+    };
+    let Ok(json) = serde_json::from_str::<JsonValue>(&data) else {
+        return result;
+    };
+    let Some(obj) = json.as_object() else {
+        return result;
+    };
+    for (_key, item) in obj {
+        let Some(id) = item.get("id").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let weapon_type = item
+            .get("weapon_type")
+            .and_then(|v| v.as_object())
+            .and_then(|m| m.values().next())
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let rarity = item.get("rarity").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        result.insert(id as u32, WeaponInfo { weapon_type, rarity });
+    }
     result
 }
 

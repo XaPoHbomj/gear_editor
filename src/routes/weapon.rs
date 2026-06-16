@@ -11,7 +11,7 @@ use crate::{
     zon::{ZValue, format_zon_pretty, read_zon, zon_get_number, zon_serialize, zon_set_number},
 };
 use axum::{
-    extract::{Form, OriginalUri, Path, State},
+    extract::{Form, OriginalUri, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect},
 };
@@ -26,8 +26,14 @@ pub(crate) struct WeaponUpdateForm {
 
 #[derive(Deserialize)]
 pub(crate) struct AddWeaponForm {
-    weapon_id: u32,
-    refine_level: u32,
+    pub(crate) weapon_id: u32,
+    pub(crate) refine_level: u32,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WeaponFilterQuery {
+    pub(crate) class: Option<String>,
+    pub(crate) rarity: Option<String>,
 }
 
 pub(crate) async fn weapon_edit(
@@ -153,6 +159,7 @@ pub(crate) async fn weapon_update(
 pub(crate) async fn weapon_new(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<WeaponFilterQuery>,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
     let Some((_session_id, _session)) = get_session(&headers) else {
@@ -160,7 +167,9 @@ pub(crate) async fn weapon_new(
     };
 
     let locale = locale_from_headers(&headers);
-    let options = render_weapon_select_options(&state, 0, locale);
+    let filter_class = query.class.unwrap_or_default();
+    let filter_rarity = query.rarity.unwrap_or_default();
+    let options = render_weapon_select_options(&state, 0, locale, &filter_class, &filter_rarity);
 
     let hakushin = load_hakushin_data(&state, locale);
     let weapon_images: HashMap<u32, String> = hakushin
@@ -190,6 +199,18 @@ pub(crate) async fn weapon_new(
 <body>
     <div class="container">
         <h1>{new_title}</h1>
+        <form method="get" style="margin-bottom:12px;">
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{class_label}</span>
+                    <select name="class" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{class_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{rarity_label}</span>
+                    <select name="rarity" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{rarity_opts}</select>
+                </div>
+            </div>
+        </form>
         <form method="post">
             <div>
                 <img id="weapon_preview" class="preview-img" />
@@ -225,6 +246,10 @@ pub(crate) async fn weapon_new(
         weapon_label = t(locale, "avatar.weapon"),
         refine_label = t(locale, "weapon.refine_level"),
         create_label = t(locale, "weapon.create"),
+        class_label = t(locale, "weapon.filter_class"),
+        rarity_label = t(locale, "weapon.filter_rarity"),
+        class_opts = render_weapon_filter_class_opts(locale, &filter_class),
+        rarity_opts = render_weapon_filter_rarity_opts(locale, &filter_rarity),
         lang = locale.lang_attr(),
         shared_css = shared_page_css(),
     );
@@ -288,7 +313,7 @@ pub(crate) async fn weapon_add(
     Redirect::to(&format!("/weapon/{new_uid}")).into_response()
 }
 
-pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale) -> String {
+pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale, filter_class: &str, filter_rarity: &str) -> String {
     let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
     let weapon_templates = load_weapon_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
@@ -316,6 +341,24 @@ pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale) ->
                 .as_ref()
                 .and_then(|v| zon_get_number(v, "level"))
                 .unwrap_or(0);
+
+            let info = hakushin.weapon_info.get(&weapon_id);
+
+            if !filter_class.is_empty() {
+                if info.map(|i| i.weapon_type.as_str()).unwrap_or("") != filter_class {
+                    continue;
+                }
+            }
+            if !filter_rarity.is_empty() {
+                let rarity_str = match info.map(|i| i.rarity).unwrap_or(0) {
+                    4 => "s",
+                    3 => "a",
+                    _ => "b",
+                };
+                if rarity_str != filter_rarity {
+                    continue;
+                }
+            }
 
             let name = hakushin
                 .weapons
@@ -349,8 +392,64 @@ pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale) ->
         ));
     }
 
+    let filter_panel = render_weapon_filter_panel(locale, filter_class, filter_rarity);
     let add_panel = render_add_weapon_panel(state, locale);
-    format!("{add_panel}<div class=\"cards\">{cards}</div>")
+    format!("{add_panel}{filter_panel}<div class=\"cards\">{cards}</div>")
+}
+
+fn render_weapon_filter_panel(locale: Locale, filter_class: &str, filter_rarity: &str) -> String {
+    let class_opts = {
+        let all_sel = if filter_class.is_empty() { " selected" } else { "" };
+        let attack_sel = if filter_class == "Attack" { " selected" } else { "" };
+        let stun_sel = if filter_class == "Stun" { " selected" } else { "" };
+        let anomaly_sel = if filter_class == "Anomaly" { " selected" } else { "" };
+        let defense_sel = if filter_class == "Defense" { " selected" } else { "" };
+        let rupture_sel = if filter_class == "Rupture" { " selected" } else { "" };
+        let support_sel = if filter_class == "Support" { " selected" } else { "" };
+        format!(
+            "<option value=\"\"{all_sel}>{all}</option><option value=\"Attack\"{attack_sel}>{attack}</option><option value=\"Stun\"{stun_sel}>{stun}</option><option value=\"Anomaly\"{anomaly_sel}>{anomaly}</option><option value=\"Defense\"{defense_sel}>{defense}</option><option value=\"Rupture\"{rupture_sel}>{rupture}</option><option value=\"Support\"{support_sel}>{support}</option>",
+            all = t(locale, "weapon.filter_all"),
+            attack = t(locale, "weapon.class_attack"),
+            stun = t(locale, "weapon.class_stun"),
+            anomaly = t(locale, "weapon.class_anomaly"),
+            defense = t(locale, "weapon.class_defense"),
+            rupture = t(locale, "weapon.class_rupture"),
+            support = t(locale, "weapon.class_support"),
+        )
+    };
+    let rarity_opts = {
+        let all_sel = if filter_rarity.is_empty() { " selected" } else { "" };
+        let s_sel = if filter_rarity == "s" { " selected" } else { "" };
+        let a_sel = if filter_rarity == "a" { " selected" } else { "" };
+        let b_sel = if filter_rarity == "b" { " selected" } else { "" };
+        format!(
+            "<option value=\"\"{all_sel}>{all}</option><option value=\"s\"{s_sel}>{s}</option><option value=\"a\"{a_sel}>{a}</option><option value=\"b\"{b_sel}>{b}</option>",
+            all = t(locale, "weapon.filter_all"),
+            s = t(locale, "weapon.rarity_s"),
+            a = t(locale, "weapon.rarity_a"),
+            b = t(locale, "weapon.rarity_b"),
+        )
+    };
+
+    format!(
+        r#"<form method="get" action="/dashboard" style="margin-bottom:12px;">
+            <input type="hidden" name="tab" value="weapons" />
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{class_label}</span>
+                    <select name="weapon_class" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{class_opts}</select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:11px; color:#9aa4b2;">{rarity_label}</span>
+                    <select name="weapon_rarity" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{rarity_opts}</select>
+                </div>
+            </div>
+        </form>"#,
+        class_label = t(locale, "weapon.filter_class"),
+        rarity_label = t(locale, "weapon.filter_rarity"),
+        class_opts = class_opts,
+        rarity_opts = rarity_opts,
+    )
 }
 
 fn render_add_weapon_panel(state: &AppState, locale: Locale) -> String {
@@ -362,11 +461,30 @@ fn render_add_weapon_panel(state: &AppState, locale: Locale) -> String {
     )
 }
 
-fn render_weapon_select_options(state: &AppState, selected_id: u32, locale: Locale) -> String {
+fn render_weapon_select_options(state: &AppState, selected_id: u32, locale: Locale, filter_class: &str, filter_rarity: &str) -> String {
     let hakushin = load_hakushin_data(state, locale);
     let mut items: Vec<(u32, String)> = hakushin
         .weapons
         .iter()
+        .filter(|(id, _)| {
+            let info = hakushin.weapon_info.get(id);
+            if !filter_class.is_empty() {
+                if info.map(|i| i.weapon_type.as_str()).unwrap_or("") != filter_class {
+                    return false;
+                }
+            }
+            if !filter_rarity.is_empty() {
+                let rarity_str = match info.map(|i| i.rarity).unwrap_or(0) {
+                    4 => "s",
+                    3 => "a",
+                    _ => "b",
+                };
+                if rarity_str != filter_rarity {
+                    return false;
+                }
+            }
+            true
+        })
         .map(|(id, entry)| (*id, entry.name.clone()))
         .collect();
     items.sort_by(|a, b| a.1.cmp(&b.1));
@@ -385,4 +503,38 @@ fn render_weapon_select_options(state: &AppState, selected_id: u32, locale: Loca
         ));
     }
     html
+}
+
+fn render_weapon_filter_class_opts(locale: Locale, filter_class: &str) -> String {
+    let all_sel = if filter_class.is_empty() { " selected" } else { "" };
+    let attack_sel = if filter_class == "Attack" { " selected" } else { "" };
+    let stun_sel = if filter_class == "Stun" { " selected" } else { "" };
+    let anomaly_sel = if filter_class == "Anomaly" { " selected" } else { "" };
+    let defense_sel = if filter_class == "Defense" { " selected" } else { "" };
+    let rupture_sel = if filter_class == "Rupture" { " selected" } else { "" };
+    let support_sel = if filter_class == "Support" { " selected" } else { "" };
+    format!(
+        "<option value=\"\"{all_sel}>{all}</option><option value=\"Attack\"{attack_sel}>{attack}</option><option value=\"Stun\"{stun_sel}>{stun}</option><option value=\"Anomaly\"{anomaly_sel}>{anomaly}</option><option value=\"Defense\"{defense_sel}>{defense}</option><option value=\"Rupture\"{rupture_sel}>{rupture}</option><option value=\"Support\"{support_sel}>{support}</option>",
+        all = t(locale, "weapon.filter_all"),
+        attack = t(locale, "weapon.class_attack"),
+        stun = t(locale, "weapon.class_stun"),
+        anomaly = t(locale, "weapon.class_anomaly"),
+        defense = t(locale, "weapon.class_defense"),
+        rupture = t(locale, "weapon.class_rupture"),
+        support = t(locale, "weapon.class_support"),
+    )
+}
+
+fn render_weapon_filter_rarity_opts(locale: Locale, filter_rarity: &str) -> String {
+    let all_sel = if filter_rarity.is_empty() { " selected" } else { "" };
+    let s_sel = if filter_rarity == "s" { " selected" } else { "" };
+    let a_sel = if filter_rarity == "a" { " selected" } else { "" };
+    let b_sel = if filter_rarity == "b" { " selected" } else { "" };
+    format!(
+        "<option value=\"\"{all_sel}>{all}</option><option value=\"s\"{s_sel}>{s}</option><option value=\"a\"{a_sel}>{a}</option><option value=\"b\"{b_sel}>{b}</option>",
+        all = t(locale, "weapon.filter_all"),
+        s = t(locale, "weapon.rarity_s"),
+        a = t(locale, "weapon.rarity_a"),
+        b = t(locale, "weapon.rarity_b"),
+    )
 }

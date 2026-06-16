@@ -54,6 +54,8 @@ struct TabQuery {
     main_stat: Option<String>,
     status: Option<String>,
     page: Option<String>,
+    weapon_class: Option<String>,
+    weapon_rarity: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -168,6 +170,8 @@ async fn dashboard(
     let filter_slot = query.slot.and_then(|s| s.parse::<u32>().ok());
     let filter_main_stat = query.main_stat.and_then(|s| s.parse::<u32>().ok());
     let filter_page = query.page.and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
+    let filter_weapon_class = query.weapon_class.unwrap_or_default();
+    let filter_weapon_rarity = query.weapon_rarity.unwrap_or_default();
     let current_mode = active_server_mode(&headers);
     let active_state = state_with_active_server(&state, &headers);
     let uid = resolve_player_uid(&active_state, session.uid);
@@ -221,7 +225,7 @@ async fn dashboard(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gear Editor</title>
+  <title>Gear Editor{title_suffix}</title>
   <style>
       body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; overflow-x: hidden; }}
       header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; position: sticky; top: 0; z-index: 20; }}
@@ -351,7 +355,7 @@ async fn dashboard(
         tab_shiyu = if tab == "shiyu" { "active" } else { "" },
         tab_updates = if tab == "updates" { "active" } else { "" },
         content = match tab.as_str() {
-            "weapons" => render_weapon_cards(&active_state, uid, locale),
+            "weapons" => render_weapon_cards(&active_state, uid, locale, &filter_weapon_class, &filter_weapon_rarity),
             "discs" => render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale, filter_set_id, filter_slot, filter_main_stat, query.status.as_deref(), filter_page),
             "bangboos" => render_bangboo_cards(&active_state, uid, locale),
             "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
@@ -366,6 +370,21 @@ async fn dashboard(
         switch_prod_href = switch_prod_href,
         lang_selector = lang_selector,
         lang_attr = locale.lang_attr(),
+        title_suffix = {
+            let mode = match current_mode {
+                ServerMode::Beta => "Beta",
+                ServerMode::Prod => "Prod",
+            };
+            let version = match current_mode {
+                ServerMode::Beta => &beta_version,
+                ServerMode::Prod => &prod_version,
+            };
+            if version.is_empty() {
+                format!(" — {mode}")
+            } else {
+                format!(" — {mode} {version}")
+            }
+        },
         nav_characters = t(locale, "nav.characters"),
         nav_weapons = t(locale, "nav.weapons"),
         nav_discs = t(locale, "nav.discs"),
