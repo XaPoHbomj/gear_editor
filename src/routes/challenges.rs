@@ -109,6 +109,32 @@ fn format_with_commas(value: i64) -> String {
     formatted
 }
 
+fn da_rotation_from_id(id: u32) -> u32 {
+    let s = id.to_string();
+    if s.len() >= 5 {
+        s[2..5].parse::<u32>().unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+fn da_mode_label(locale: Locale, id: u32) -> String {
+    let s = id.to_string();
+    if s.len() < 6 {
+        return t(locale, "da.mode_normal").to_string();
+    }
+    let rotation = da_rotation_from_id(id);
+    if rotation < 42 {
+        return t(locale, "da.mode_normal").to_string();
+    }
+    let mode_digit = s.chars().nth(5).and_then(|c| c.to_digit(10)).unwrap_or(0);
+    if mode_digit == 2 {
+        t(locale, "da.mode_hardcore").to_string()
+    } else {
+        t(locale, "da.mode_normal").to_string()
+    }
+}
+
 fn format_stat_value(value: Option<f64>, locale: Locale) -> String {
     value
         .map(|v| format_with_commas(v.round() as i64))
@@ -189,9 +215,22 @@ fn render_rich_text(text: &str) -> String {
     out
 }
 
-fn da_total_hp_from_base(base_hp: f64) -> i64 {
-    // Observed from DA data: total HP is a stable 8.74x of base HP.
-    (base_hp * 8.74).round() as i64
+fn da_total_hp_from_base(base_hp: f64, da_id: u32) -> i64 {
+    let multiplier = if da_mode_label_raw(da_id) == "hardcore" { 8.74 * 2.5 } else { 8.74 };
+    (base_hp * multiplier).round() as i64
+}
+
+fn da_mode_label_raw(id: u32) -> &'static str {
+    let s = id.to_string();
+    if s.len() < 6 {
+        return "normal";
+    }
+    let rotation = da_rotation_from_id(id);
+    if rotation < 42 {
+        return "normal";
+    }
+    let mode_digit = s.chars().nth(5).and_then(|c| c.to_digit(10)).unwrap_or(0);
+    if mode_digit == 2 { "hardcore" } else { "normal" }
 }
 
 fn shiyu_max_stage(shiyu_data: &JsonValue) -> u32 {
@@ -405,7 +444,6 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
     let zone_info_path = state.asset_dir.join("ZoneInfoTemplateTb.json");
 
     // Load available DA zone IDs (starting with 69) from ZoneInfoTemplateTb.json
-    // Keep full zone_id to support DA variants (e.g., 69038 and 690381 are separate)
     let mut available_zones = std::collections::HashSet::new();
     if let Ok(zone_content) = fs::read_to_string(&zone_info_path) {
         if let Ok(zone_data) = serde_json::from_str::<serde_json::Value>(&zone_content) {
@@ -413,8 +451,7 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
                 for entry in data_array {
                     if let Some(zone_id) = entry.get("zone_id").and_then(|z| z.as_u64()) {
                         let zone_id = zone_id as u32;
-                        // Include all DA zones (base and variants like 69038 and 690381)
-                        if zone_id >= 69000 && zone_id < 70000 {
+                        if zone_id >= 69000 {
                             available_zones.insert(zone_id);
                         }
                     }
@@ -429,7 +466,6 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
         .join(format!("player/{uid}/hadal_zone/info"));
     let selected_da = if let Some(hadal_zon) = read_zon(&hadal_path) {
         if let Some(zone_id) = zon_get_entrance_zone_id(&hadal_zon, 9) {
-            // Use exact zone_id to support DA variants (69038, 690381, etc.)
             zone_id
         } else {
             0
@@ -448,11 +484,10 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
                 .iter()
                 .filter_map(|(id_str, details)| {
                     let id = id_str.parse::<u32>().ok()?;
-                    // Show DA entries when exact zone exists OR when a 6-digit hotfix variant
-                    // maps to an available 5-digit base zone (e.g., 690381 -> 69038).
-                    let id_str = id.to_string();
-                    let base_id = if id_str.len() == 6 { id / 10 } else { id };
-                    if !available_zones.contains(&id) && !available_zones.contains(&base_id) {
+                    if !id_str.starts_with("69") {
+                        return None;
+                    }
+                    if !available_zones.contains(&id) {
                         return None;
                     }
 
@@ -497,8 +532,7 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
                 })
                 .collect();
 
-            // Sort: selected first, then by 5-digit base ID desc, then full ID desc.
-            // Example: 69027 comes before 690271.
+            // Sort: selected first, then by rotation desc, then by full ID desc.
             da_entries.sort_by(|a, b| {
                 let a_selected = a.0 == selected_da;
                 let b_selected = b.0 == selected_da;
@@ -510,10 +544,10 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
                     };
                 }
 
-                let a_base = if a.0 >= 100000 { a.0 / 10 } else { a.0 };
-                let b_base = if b.0 >= 100000 { b.0 / 10 } else { b.0 };
+                let a_rot = da_rotation_from_id(a.0);
+                let b_rot = da_rotation_from_id(b.0);
 
-                b_base.cmp(&a_base).then_with(|| b.0.cmp(&a.0))
+                b_rot.cmp(&a_rot).then_with(|| b.0.cmp(&a.0))
             });
 
             for (id, name, boss_names) in da_entries {
@@ -525,9 +559,13 @@ pub(crate) fn render_da_panel(state: &AppState, uid: u32, locale: Locale) -> Str
                 };
                 let boss_list = boss_names.join("<br>");
                 let selected_mark = if is_selected { " ✓" } else { "" };
+                let mode = da_mode_label(locale, id);
+                let mode_color = if da_mode_label_raw(id) == "hardcore" { "#ef4444" } else { "#c7d1e0" };
+                let mode_html = format!(r#"<div style="font-size:14px; font-weight:600; color:{mode_color}; margin-bottom:8px;">{mode_label}: {mode}</div>"#, mode_color = mode_color, mode_label = t(locale, "da.mode"), mode = mode);
                 cards.push_str(&format!(
                     r#"<a href="/da/{id}" class="card" {style}>
                         <h3>{name}{selected_mark}</h3>
+                        {mode_html}
                         <div class="meta">{id_label}: {id}<br>{boss_list}</div>
                     </a>"#,
                     id_label = t(locale, "common.id"),
@@ -762,7 +800,7 @@ pub(crate) async fn da_detail(
 
                                 let base_hp_value =
                                     stats.get("hp").and_then(|h| h.as_f64()).unwrap_or(0.0);
-                                let hp = format_with_commas(da_total_hp_from_base(base_hp_value));
+                                let hp = format_with_commas(da_total_hp_from_base(base_hp_value, id));
                                 let base_hp = format_with_commas(base_hp_value.round() as i64);
                                 let atk =
                                     format_stat_value(stats.get("attack").and_then(|a| a.as_f64()), locale);
