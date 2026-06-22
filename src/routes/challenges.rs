@@ -980,22 +980,17 @@ pub(crate) async fn da_detail(
 <body>
 <header>
   <a href="/dashboard?tab=da" class="back">{2}</a>
-    <form method="post" action="/da/{1}/select" style="margin: 0;">
-        <button type="submit" style="padding: 10px 18px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
-            {3}
-        </button>
-    </form>
 </header>
 <div class="container">
-  <h1>{0} {4} {1}</h1>
+  <h1>{0} {3} {1}</h1>
   <div class="cards">
+    {4}
     {5}
-    {6}
   </div>
 </div>
 </body>
 </html>"#,
-                da_name, id, t(locale, "da.back"), t(locale, "da.select"), t(locale, "common.id"), buff_cards, boss_cards,
+                da_name, id, t(locale, "da.back"), t(locale, "common.id"), buff_cards, boss_cards,
                 lang = locale.lang_attr()
                 );
 
@@ -1249,23 +1244,18 @@ pub(crate) async fn shiyu_detail(
 <body>
 <header>
   <a href="/dashboard?tab=shiyu" class="back">{2}</a>
-    <form method="post" action="/shiyu/{1}/select" style="margin: 0;">
-        <button type="submit" style="padding: 10px 18px; background: #4c7dff; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
-            {3}
-        </button>
-    </form>
 </header>
 <div class="container">
-  <h1>{0} {4} {1}</h1>
-    <div class="floor-tabs">{5}</div>
+  <h1>{0} {3} {1}</h1>
+    <div class="floor-tabs">{4}</div>
   <div class="cards">
+        {5}
         {6}
-        {7}
   </div>
 </div>
 </body>
 </html>"#,
-                shiyu_name, id, t(locale, "shiyu.back"), t(locale, "shiyu.select"), t(locale, "common.id"), tab_html, buff_cards, fight_cards,
+                shiyu_name, id, t(locale, "shiyu.back"), t(locale, "common.id"), tab_html, buff_cards, fight_cards,
                 lang = locale.lang_attr()
                 );
 

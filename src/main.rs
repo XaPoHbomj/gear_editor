@@ -163,7 +163,7 @@ async fn dashboard(
         return redirect_to_login(&original_uri.0);
     };
 
-    let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
+    let tab = query.tab.unwrap_or_else(|| "da".to_string());
     let delete_mode = query.delete.unwrap_or(0) == 1;
     let lock_mode = query.lock.unwrap_or(0) == 1;
     let filter_set_id = query.set_id.and_then(|s| s.parse::<u32>().ok());
@@ -301,10 +301,6 @@ async fn dashboard(
         <span></span>
     </button>
     <div class="desktop-tabs tabs">
-        <a class="{tab_avatar}" href="/dashboard?tab=avatars">{nav_characters}</a>
-        <a class="{tab_weapon}" href="/dashboard?tab=weapons">{nav_weapons}</a>
-        <a class="{tab_equip}" href="/dashboard?tab=discs">{nav_discs}</a>
-        <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
         <a class="{tab_da}" href="/dashboard?tab=da">{nav_deadly_assault}</a>
         <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">{nav_shiyu}</a>
         <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
@@ -323,10 +319,6 @@ async fn dashboard(
 </header>
 <div class="mobile-overlay" onclick="this.classList.remove('open'); document.querySelector('.mobile-drawer').classList.remove('open');"></div>
 <aside class="mobile-drawer tabs" aria-hidden="true">
-    <a class="{tab_avatar}" href="/dashboard?tab=avatars">{nav_characters}</a>
-    <a class="{tab_weapon}" href="/dashboard?tab=weapons">{nav_weapons}</a>
-    <a class="{tab_equip}" href="/dashboard?tab=discs">{nav_discs}</a>
-    <a class="{tab_bangboo}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
     <a class="{tab_da}" href="/dashboard?tab=da">{nav_deadly_assault}</a>
     <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">{nav_shiyu}</a>
     <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
@@ -347,10 +339,6 @@ async fn dashboard(
 </main>
 </body>
 </html>"#,
-        tab_avatar = if tab == "avatars" { "active" } else { "" },
-        tab_weapon = if tab == "weapons" { "active" } else { "" },
-        tab_equip = if tab == "discs" { "active" } else { "" },
-        tab_bangboo = if tab == "bangboos" { "active" } else { "" },
         tab_da = if tab == "da" { "active" } else { "" },
         tab_shiyu = if tab == "shiyu" { "active" } else { "" },
         tab_updates = if tab == "updates" { "active" } else { "" },
@@ -385,10 +373,6 @@ async fn dashboard(
                 format!(" — {mode} {version}")
             }
         },
-        nav_characters = t(locale, "nav.characters"),
-        nav_weapons = t(locale, "nav.weapons"),
-        nav_discs = t(locale, "nav.discs"),
-        nav_bangboos = t(locale, "nav.bangboos"),
         nav_deadly_assault = t(locale, "nav.deadly_assault"),
         nav_shiyu = t(locale, "nav.shiyu"),
         nav_client_updates = t(locale, "nav.client_updates"),
