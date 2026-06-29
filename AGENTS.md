@@ -2,152 +2,125 @@
 
 ## Project Overview
 
-A web-based player profile/state editor for Zenless Zone Zero private server. It reads and writes ZON-format state files directly on disk, shared with the Yoshunko game server process.
+Web admin panel for the remielle game server. Reads/writes protobuf `PlayerSave` files, reads server config ZON files, and serves game data from `zzz_dump/latest/`.
 
-**Tech stack:** Rust + Axum 0.7, no templating engine (all HTML generated inline via `format!()`), vanilla JS only.
+**Tech stack:** Rust + Axum 0.7, inline `format!()` HTML, vanilla JS.
 
----
-
-## Key Architectural Decisions
-
-### Why inline HTML templates (no Tera/Hadron/etc)?
-The project started with server-side `format!()` and never needed more. Each page is small (1-2 screens), and using `format!()` means no build-time template compilation, no template directories, and everything is in one place. All HTML lives inside handler functions in `src/routes/*.rs`.
-
-### Why no JavaScript framework?
-All interactions are form POST/GET. The only dynamic UI is:
-- Substat cascading dropdowns (disc edit/new pages — ~30 lines of vanilla JS)
-- Image preview on select change (weapon/disc creation — ~10 lines)
-- Mobile drawer toggle (native DOM API)
-
-### Why ZON files and not a database?
-The Yoshunko game server stores player state as flat ZON files (a Zig object notation). The gear_editor reads/writes the same files directly, avoiding any sync layer or API.
-
-### Why pending_writes pattern?
-Edits are staged in an in-memory `HashMap<PathBuf, String>` and written to disk in one batch via `/apply`. This allows the user to make multiple edits before committing. Direct writes (for creation) bypass this and write immediately.
-
-### Why global mutable session store?
-A `OnceLock<Mutex<HashMap<String, Session>>>` holds all active sessions. This is acceptable because gear_editor is a single-user admin tool (not a multi-tenant service).
+**Branch:** `remielle-support` — single-server, no beta/prod switching.
 
 ---
 
 ## Project Structure
 
 ```
-scripts/
-├── auto_update_gear_editor.sh  # Cron-based auto-update (git pull + restart)
 gear_editor/
-├── AGENTS.md           # This file
-├── BRANDBOOK.md        # UI design documentation
-├── BRANDBOOK.html      # Visual HTML reference of all UI elements
-├── Cargo.toml          # Dependencies: axum, tokio, serde, rusqlite, tower-http
-├── README.md           # Architecture and setup docs
 └── src/
-    ├── main.rs         # App bootstrap, Router, dashboard HTML template (~430 lines)
-    ├── app_state.rs    # AppState, ServerMode, cookie parsing, version reading
-    ├── auth.rs         # Session store, login validation, HTML escaping
-    ├── config.rs       # SDK config loading (TOML)
-    ├── assets.rs       # Static file serving (range requests, image caching)
-    ├── i18n.rs         # 5-locale translation (~107 keys x 5 = ~535 strings)
-    ├── player_state.rs # UID resolution, next-uid counter, stat select rendering
-    ├── updates.rs      # Client updates panel (patch/update file listing)
-    ├── utils.rs        # apply_changes handler, shared_page_css(), svg_data_uri helper
-    ├── zon.rs          # ZON format parser/serializer (~744 lines)
+    ├── main.rs         # Router, dashboard HTML with inline CSS
+    ├── app_state.rs    # AppState, cookie parsing, version from state_dir/version/
+    ├── auth.rs         # Session store, login (pbkdf2 against hoyo-sdk DB)
+    ├── assets.rs       # Static file serving from zzz_dump/assets/
+    ├── i18n.rs         # 5-locale translation table (EN, RU, CN, KR, JP)
+    ├── player_state.rs # UID resolution from GENERAL_DATA.bin, PlayerSave load/save
+    ├── remielle_save.rs# Manual protobuf parser/serializer (~660 lines)
+    ├── updates.rs      # Client updates panel (upload/delete/browse)
+    ├── utils.rs        # apply_changes, shared_page_css, svg_data_uri
+    ├── zon.rs          # ZON format parser: read_zon, zon_parse_entries
     ├── data/
-    │   ├── mod.rs
-    │   ├── hakushin.rs # Hakushin.gg dump data: char/weapon/disc/bangboo names + images
-    │   └── templates.rs# Game template JSON loading (Avatar, Weapon, Equipment)
-    ├── domain/
-    │   ├── mod.rs
-    │   └── discs.rs    # Disc stat definitions, main/sub stat options, base values, Wind
+    │   ├── hakushin.rs # Hakushin.gg dump: char/weapon/disc/bangboo names+images
+    │   └── templates.rs# Template JSON via zon_parse_entries (ZON format)
     └── routes/
-        ├── mod.rs
-        ├── auth.rs     # Login, login page, server switch
-        ├── avatar.rs   # Character edit, update, card rendering, add-all
-        ├── weapon.rs   # Weapon edit/new/update/add, card rendering
-        ├── equip.rs    # Disc edit/new/generate/delete/lock, card rendering, filter/pagination
-        ├── bangboo.rs  # Bangboo edit, update, card rendering, add-all
-        ├── challenges.rs # Deadly Assault & Shiyu detail panels
-        └── admin.rs    # Client update upload/delete
+        ├── auth.rs     # Login page
+        ├── avatar.rs   # Character edit/update/cards/add-all (protobuf PlayerSave)
+        ├── weapon.rs   # Weapon edit/new/update/add (protobuf PlayerSave)
+        ├── equip.rs    # Disc edit/new/generate/delete/lock/filter (protobuf PlayerSave)
+        ├── bangboo.rs  # Bangboo edit/update/cards/add-all (protobuf PlayerSave)
+        ├── challenges.rs # DA/Shiyu detail pages + status tab
+        └── admin.rs    # Client update upload/delete + hadal zone editing
 ```
 
 ---
 
-## How the App Works
+## State Directory Layout (Remielle)
 
-1. **Login** — User authenticates via `/login` (pbkdf2 against hoyo-sdk SQLite DB). Session created with random 48-char ID stored in `ge_session` cookie.
-
-2. **Dashboard** — `GET /dashboard?tab={tab}` renders the full HTML page with header, tabs, and content panel. Tab query param switches between: `avatars` (default), `weapons`, `discs`, `bangboos`, `da`, `shiyu`, `updates`.
-
-3. **Tab content** — Each tab renders cards via a `render_*_cards()` function that reads ZON files from `{state_dir}/player/{uid}/{entity_kind}/`.
-
-4. **Editing** — Clicking a card opens `/entity/:id` edit page. Changes go to `session.pending_writes`, applied via `/apply`.
-
-5. **Creation** — New weapons/discs/avatars/bangboos are written directly to disk (no pending_writes).
-
-6. **Server switching** — `gear_server` cookie toggles between `beta`/`prod`. Pending writes are cleared on switch.
-
----
-
-## Key Data Flow
-
-### State directory layout
 ```
-{state_dir}/player/{player_uid}/
-    account/{uid}               # Account -> player_uid mapping
-    avatar/{avatar_id}          # ZON file, no extension
-    weapon/{weapon_uid}         # ZON file, no extension
-    equip/{equip_uid}           # ZON file, no extension
-    buddy/{bangboo_uid}         # ZON file, no extension
-    hadal_zone/info             # Shiyu/Deadly Assault progress
-    weapon/next                 # Auto-increment counter
-    equip/next                  # Auto-increment counter
+bin_remielle/Persistent/LocalStorage/
+    GENERAL_DATA.bin          # LE u64 array: index i -> player_uid = 666 + i
+    USD_{uid}.bin             # PlayerSave protobuf (fields 1-8)
+configs_remielle/server{1,2,3}/
+    config.zon                # Server config with hadal_zone_entrances
+zzz_dump/latest/{en,zh,ko,ja}/
+    avatar_details.json       # Character data
+    weapon_details.json       # Weapon data
+    equip_details.json        # Disc data
+    buddy_details.json        # Bangboo data
+    boss_details.json         # DA boss data
+    shiyu_details.json        # Shiyu data
+    .../zzz/UI/               # Referenced game UI assets
 ```
 
-### How entities are read
-1. `resolve_player_uid()` maps account UID → player UID
-2. Each entity has a directory: `player/{uid}/avatar/`, `player/{uid}/weapon/`, etc.
-3. `read_zon()` parses the ZON file into a `ZValue` enum
-4. `zon_get_number()`, `zon_get_array_numbers()`, etc. extract fields
+---
 
-### How entities are written
-- **Creations** (weapon_add, equip_add, avatar_add_all, bangboo_add_all): `fs::write()` directly to disk
-- **Edits** (avatar_update, weapon_update, etc.): `session.pending_writes.insert(path, serialized)` → later flushed by `/apply`
+## Protobuf PlayerSave (Most Important)
+
+`remielle_save.rs` implements a manual protobuf parser (no `prost`/`protoc`). PlayerSave fields:
+
+| Field | Content |
+|-------|---------|
+| 1 | basic info (optional) |
+| 2 | avatar list |
+| 3 | weapon list |
+| 4 | equip list |
+| 5 | buddy list |
+| 6 | hall (last city location) |
+| 7 | main_city_time |
+| 8 | unknown (optional) |
+
+**No hadal_zone field.** DA/Shiyu state is runtime-only in remielle (not persisted).
+
+Key functions in `remielle_save.rs`:
+- `parse_player_save(data: &[u8]) -> PlayerSave`
+- `serialize_player_save(save: &PlayerSave) -> Vec<u8>`
 
 ---
 
-## Adding a New Feature
+## DA/Shiyu Features (Status Tab + Detail Pages)
 
-1. **New translation keys** → Add to all 5 locale functions in `i18n.rs`
-2. **New route handler** → Add to appropriate file in `src/routes/`
-3. **New route** → Register in `main.rs` Router
-4. **New dashboard tab** → Add tab link in both `.desktop-tabs` and `.mobile-drawer.tabs` in `main.rs`, add tab detection + content match arm
-5. **Panel with buttons** → Use `<div class="panel">` pattern (see BRANDBOOK.md/BRANDBOOK.html)
-6. **Form page** → Use `.container` + `.row` grid + standard form elements (see existing edit/new pages for reference)
+### Status tab (`/dashboard?tab=status`)
+- Reads `configs_remielle/server{1,2,3}/config.zon` via `extract_entrance_zone()`
+- Shows 3 card panels per server: Shiyu, Deadly Assault, Deadly Assault Hardcore
+- Cards use labels (not zone names) as titles
+- Admin users see inline zone ID edit forms that call `scripts/update_hadal_zone.sh`
 
----
+### Detail pages (`/da/:id`, `/shiyu/:id`)
+- Read-only, no selection/writing
+- DA: shows boss cards with HP/BaseHP/ATK/DEF/Stun, weakness/resistance from `monster.element` (lowercase keys), layer buffs
+- Shiyu: floor tabs, ordered rooms with monster cards sorted by HP desc, buffs from `layer_buff`
+- Element icons: `IconFire.webp` etc. (not `Sprite/Element_Fire.webp`)
 
-## UI Conventions
-
-Full design system documented in `BRANDBOOK.md` and `BRANDBOOK.html`.
-
-- **Colors**: Dark theme (`#0f1115` bg, `#e6e6e6` text), blue primary (`#4c7dff`), green apply (`#22c55e`), red danger (`#ef4444`)
-- **Panels**: `.panel` with `<h3>` on left, `<div style="display:flex; gap:8px;">` on right with action buttons
-- **Cards**: `.cards` grid with `.card` items, each containing `.thumb` image, `.pill` badge, `h3` title, `.meta` lines
-- **Forms**: `.row` 2-column grid, labels at `12px #9aa4b2`, inputs at `#121620` bg with `#2a3140` border
-- **Breakpoint**: 768px — panels stack vertically, cards become 1-column, hamburger menu appears
-- **Preview images**: `.preview-img` class, hidden until selection, 33.33% width desktop / 100% mobile, left-aligned
+### Admin hadal zone editing
+- POST `/admin/update-hadal-zone` — runs `scripts/update_hadal_zone.sh <server> <hadal_id> <new_zone>`
+- Script stops the server, updates config.zon, rebuilds and relaunches
+- Only visible to admin users (checked via `is_admin()`)
 
 ---
 
-## Notes for Agents
+## Key Conventions
 
-- **Don't add emojis** unless explicitly asked.
-- **Don't add comments** to code unless asked.
-- **All CSS is inline** in `main.rs` (dashboard) or inside each handler's `format!()` (sub-pages). There are no `.css` files.
-- **Use the same variable names** as existing code for consistency (e.g., `locale`, `state`, `active_state`, `hakushin`).
-- **The `t()` function** requires the locale from `locale_from_headers(&headers)`. All card labels (Level, Set, Slot, Main Stat, Sub Stats) use i18n keys — never hardcode "Level" or "ID" in format strings.
-- **Cache-aware**: `load_hakushin_data()` caches results; it's cheap to call multiple times.
-- **Patch files** (`updates.rs::find_update_file`) match by prefix (`vortex_patch_beta_` / `vortex_patch_prod_`) and pick the newest `.zip` — no hardcoded filenames.
-- **Version display**: `read_version_from_dir()` reads the first file in `{state_dir}/version/` and extracts everything from the first digit onward (e.g. `CNBetaWin3.0.3` → `3.0.3`). Versions are shown on Beta/Prod buttons in the header.
-- **Never SCP/SSH** to remote without explicit permission.
-- **Commit messages** should follow the existing convention: short description, then blank line, then bullet points.
+- **The `t()` function** requires locale from `locale_from_headers(&headers)`. Never hardcode labels.
+- **All CSS is inline** in main.rs or handler format!() blocks. No .css files.
+- **Don't add emojis** unless asked.
+- **Don't add comments** unless asked.
+- **Build/test**: `cargo build` in `gear_editor/`. Run with `cargo run -r -j1`.
+- **i18n keys**: Add to all 5 locale functions in `i18n.rs`.
+- **New routes**: Register in `main.rs` Router, add tab link in both `.desktop-tabs` and `.mobile-drawer.tabs`.
+- **Data access**: Use `state.dump_lang_dir(locale)` for language-specific dump data; RU falls back to EN.
+- **Commit messages**: Short description, blank line, bullet points. **Do not commit/push without asking.**
+
+---
+
+## UI Rules for Status Cards (`.panel .card`)
+
+`.panel a` in main.rs styles ALL `<a>` inside panels as blue buttons. To override for cards:
+- Cards use `<div class="card">` with inner `<a>` for the clickable area
+- CSS: `.panel .card { background: #1b1f2a; ... }` and `.panel .card a { background: none; ... }`
+- Grid: `.panel .cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }`
