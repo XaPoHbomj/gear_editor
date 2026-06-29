@@ -16,6 +16,61 @@ pub(crate) struct DeleteForm {
     filename: String,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct UpdateHadalZoneForm {
+    server: u32,
+    hadal_id: String,
+    new_zone: u32,
+}
+
+pub(crate) async fn admin_update_hadal_zone(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    original_uri: OriginalUri,
+    axum::extract::Form(payload): axum::extract::Form<UpdateHadalZoneForm>,
+) -> impl IntoResponse {
+    let Some((_session_id, session)) = get_session(&headers) else {
+        return redirect_to_login(&original_uri.0).into_response();
+    };
+
+    if !is_admin(&session) {
+        return (StatusCode::FORBIDDEN, Html("Forbidden")).into_response();
+    }
+
+    if !(1..=3).contains(&payload.server) {
+        return Html("Invalid server number (1-3)").into_response();
+    }
+
+    let valid_ids = ["hadal_zone_scheduled", "hadal_zone_stable", "hadal_zone_defensive", "boss_challenge_normal", "boss_challenge_hard"];
+    if !valid_ids.contains(&payload.hadal_id.as_str()) {
+        return Html("Invalid hadal_id").into_response();
+    }
+
+    let script = state.root_dir.join("scripts/update_hadal_zone.sh");
+    let output = std::process::Command::new("bash")
+        .arg(script.to_str().unwrap_or("scripts/update_hadal_zone.sh"))
+        .arg(payload.server.to_string())
+        .arg(&payload.hadal_id)
+        .arg(payload.new_zone.to_string())
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            audit_log(&state.root_dir, &session.username, session.uid, "update_hadal_zone", &format!("server={} {} -> {}", payload.server, payload.hadal_id, payload.new_zone));
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Html(format!("Script failed: {}", stderr)).into_response();
+        }
+        Err(e) => {
+            return Html(format!("Failed to run script: {}", e)).into_response();
+        }
+    }
+
+    let locale = locale_from_headers(&headers);
+    Redirect::to(&format!("/dashboard?tab=status")).into_response()
+}
+
 const MIN_FREE_SPACE: u64 = 1024 * 1024 * 1024;
 
 pub(crate) async fn admin_upload_update(

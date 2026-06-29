@@ -393,7 +393,7 @@ fn element_label(locale: Locale, element: &str) -> &str {
     }
 }
 
-pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale) -> String {
+pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale, is_admin: bool) -> String {
     let root = &state.root_dir;
     let mut out = String::new();
 
@@ -422,9 +422,9 @@ pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale
         let shiyu_details_path = dump_dir.join("shiyu_details.json");
         let boss_details_path = dump_dir.join("boss_details.json");
 
-        let shiyu_card = render_status_card(locale, shiyu_zone, "/shiyu/", t(locale, "status.shiyu"), &shiyu_details_path, "shiyu");
-        let da_card = render_status_card(locale, da_normal_zone, "/da/", t(locale, "status.da"), &boss_details_path, "da");
-        let da_hard_card = render_status_card(locale, da_hard_zone, "/da/", t(locale, "status.da_hardcore"), &boss_details_path, "da");
+        let shiyu_card = render_status_card(locale, shiyu_zone, "/shiyu/", t(locale, "status.shiyu"), &shiyu_details_path, "shiyu", server, "hadal_zone_scheduled", is_admin);
+        let da_card = render_status_card(locale, da_normal_zone, "/da/", t(locale, "status.da"), &boss_details_path, "da", server, "boss_challenge_normal", is_admin);
+        let da_hard_card = render_status_card(locale, da_hard_zone, "/da/", t(locale, "status.da_hardcore"), &boss_details_path, "da", server, "boss_challenge_hard", is_admin);
 
         out.push_str(&format!(
             r#"<div class="panel" style="display:block; margin-bottom:16px;">
@@ -459,25 +459,54 @@ fn extract_entrance_zone(config: &str, entrance_name: &str) -> u32 {
     0
 }
 
-fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &str, details_path: &FsPath, kind: &str) -> String {
+fn render_hadal_edit_form(server: u32, hadal_id: &str, locale: Locale) -> String {
+    format!(
+        r#"<form method="post" action="/admin/update-hadal-zone" style="margin-top:10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <input type="hidden" name="server" value="{server}">
+            <input type="hidden" name="hadal_id" value="{hadal_id}">
+            <input type="number" name="new_zone" placeholder="New ID" required style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
+            <button type="submit" style="padding:5px 10px; border:0; border-radius:6px; background:#4c7dff; color:#fff; font-weight:600; font-size:12px; cursor:pointer;">{update_label}</button>
+        </form>"#,
+        server = server,
+        hadal_id = hadal_id,
+        update_label = t(locale, "status.update_zone"),
+    )
+}
+
+fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &str, details_path: &FsPath, kind: &str, server: u32, hadal_id: &str, is_admin: bool) -> String {
     if zone_id == 0 {
+        let admin_form = if is_admin {
+            render_hadal_edit_form(server, hadal_id, locale)
+        } else {
+            String::new()
+        };
         return format!(
-            r#"<a class="card" style="text-decoration:none;color:inherit;opacity:0.5;">
+            r#"<div class="card" style="text-decoration:none;color:inherit;opacity:0.5;">
                 <h3>{}</h3>
                 <div class="meta">{}</div>
-            </a>"#,
-            label, t(locale, "common.na")
+                {}
+            </div>"#,
+            label, t(locale, "common.na"), admin_form
         );
     }
 
     let (_, boss_names) = lookup_zone_detail(details_path, zone_id, kind, locale);
     let boss_list = boss_names.join("<br>");
 
+    let admin_form = if is_admin {
+        render_hadal_edit_form(server, hadal_id, locale)
+    } else {
+        String::new()
+    };
+
     format!(
-        r#"<a href="{prefix}{zone}" class="card" style="text-decoration:none;color:inherit;">
-            <h3>{label}</h3>
-            <div class="meta">{id_label}: {zone}<br>{boss_list}</div>
-        </a>"#,
+        r#"<div class="card" style="text-decoration:none;color:inherit;position:relative;">
+            <a href="{prefix}{zone}" style="text-decoration:none;color:inherit;display:block;">
+                <h3>{label}</h3>
+                <div class="meta">{id_label}: {zone}<br>{boss_list}</div>
+            </a>
+            {admin_form}
+        </div>"#,
         prefix = link_prefix,
         zone = zone_id,
         label = label,

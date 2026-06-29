@@ -33,7 +33,7 @@ use routes::auth::{login, login_page, logout};
 use routes::avatar::{avatar_add_all, avatar_edit, avatar_update, render_avatar_cards};
 use routes::bangboo::{bangboo_add_all, bangboo_edit, bangboo_update, render_bangboo_cards};
 use routes::challenges::{da_detail, render_da_shiyu_status, shiyu_detail};
-use routes::admin::{admin_delete_update, admin_upload_update};
+use routes::admin::{admin_delete_update, admin_update_hadal_zone, admin_upload_update};
 use routes::equip::{
     equip_add, equip_delete_all_unlocked, equip_delete_submit, equip_edit, equip_generate,
     equip_generate_submit, equip_lock_selected, equip_new, equip_update, render_equip_cards,
@@ -112,6 +112,7 @@ async fn main() {
         .route("/bangboo/add-all", post(bangboo_add_all))
         .route("/admin/upload-update", post(admin_upload_update).layer(DefaultBodyLimit::disable()))
         .route("/admin/delete-update", post(admin_delete_update))
+        .route("/admin/update-hadal-zone", post(admin_update_hadal_zone))
         .route("/da/:id", get(da_detail))
         .route("/shiyu/:id", get(shiyu_detail))
         .route("/apply", post(apply_changes))
@@ -230,6 +231,7 @@ async fn dashboard(
         .panel h3 {{ margin: 0; font-size: 14px; }}
         .panel a {{ display: inline-flex; align-items: center; justify-content: center; margin-top: 16px; padding: 10px 14px; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; text-decoration: none; box-sizing: border-box; }}
         .panel .card {{ background: #1b1f2a; color: #e6e6e6; display: block; text-decoration: none; border: 1px solid #232a38; border-radius: 12px; padding: 14px; margin-top: 0; font-weight: normal; }}
+        .panel .card a {{ display: block; background: none; color: inherit; padding: 0; margin: 0; border-radius: 0; font-weight: normal; text-decoration: none; }}
         .panel .card h3 {{ margin: 6px 0 8px; font-size: 16px; }}
         .panel .card .meta {{ color: #9aa4b2; font-size: 12px; }}
         .panel .cards {{ width: 100%; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }}
@@ -334,7 +336,7 @@ async fn dashboard(
             "bangboos" => render_bangboo_cards(&state, uid, locale),
 
             "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-            "status" => render_status_tab(&state, uid, locale),
+            "status" => render_status_tab(&state, uid, locale, is_admin),
             _ => render_avatar_cards(&state, uid, locale),
         },
         session_id = session_id,
@@ -379,6 +381,6 @@ async fn set_language(
     response
 }
 
-fn render_status_tab(state: &AppState, uid: u32, locale: Locale) -> String {
-    render_da_shiyu_status(state, uid, locale)
+fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool) -> String {
+    render_da_shiyu_status(state, uid, locale, is_admin)
 }
