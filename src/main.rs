@@ -54,7 +54,6 @@ struct TabQuery {
     page: Option<String>,
     weapon_class: Option<String>,
     weapon_rarity: Option<String>,
-    server: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -193,7 +192,6 @@ async fn dashboard(
     let tab_bangboos = if tab == "bangboos" { "active" } else { "" };
     let tab_updates = if tab == "updates" { "active" } else { "" };
     let tab_status = if tab == "status" { "active" } else { "" };
-    let server = query.server.unwrap_or(1).clamp(1, 3);
 
     let title_suffix = if version.is_empty() {
         format!(" — Remielle")
@@ -332,7 +330,7 @@ async fn dashboard(
             "bangboos" => render_bangboo_cards(&state, uid, locale),
 
             "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-            "status" => render_status_tab(&state, uid, locale, server),
+            "status" => render_status_tab(&state, uid, locale),
             _ => render_avatar_cards(&state, uid, locale),
         },
         session_id = session_id,
@@ -377,20 +375,6 @@ async fn set_language(
     response
 }
 
-fn render_status_tab(state: &AppState, uid: u32, locale: Locale, server: u32) -> String {
-    let server_tabs = (1..=3).map(|s| {
-        let active = if s == server { "active" } else { "" };
-        let label = t(locale, "status.server");
-        format!(
-            r#"<a href="/dashboard?tab=status&server={s}" class="{active}" style="margin-right: 0; padding: 8px 12px; border-radius: 8px; text-decoration: none; font-weight: 600; {style}">{label} {s}</a>"#,
-            style = if s == server { "background: #4c7dff; color: #fff;" } else { "background: #2a3140; color: #c7d1e0;" }
-        )
-    }).collect::<Vec<_>>().join("");
-
-    let content = render_da_shiyu_status(state, uid, locale, server);
-
-    format!(
-        r#"<div class="tabs" style="margin-bottom: 16px;">{server_tabs}</div>
-        {content}"#
-    )
+fn render_status_tab(state: &AppState, uid: u32, locale: Locale) -> String {
+    render_da_shiyu_status(state, uid, locale)
 }

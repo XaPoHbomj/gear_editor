@@ -393,46 +393,49 @@ fn element_label(locale: Locale, element: &str) -> &str {
     }
 }
 
-pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale, server: u32) -> String {
+pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale) -> String {
     let root = &state.root_dir;
-    let config_path = root.join(format!("configs_remielle/server{}/config.zon", server));
+    let mut out = String::new();
 
-    let config_content = match fs::read_to_string(&config_path) {
-        Ok(c) => c,
-        Err(_) => return format!("<p class=\"meta\">{}</p>", t(locale, "status.config_not_found")),
-    };
+    for server in 1..=3 {
+        let config_path = root.join(format!("configs_remielle/server{}/config.zon", server));
 
-    let shiyu_zone = extract_entrance_zone(&config_content, "hadal_zone_scheduled");
-    let da_normal_zone = extract_entrance_zone(&config_content, "boss_challenge_normal");
-    let da_hard_zone = extract_entrance_zone(&config_content, "boss_challenge_hard");
+        let config_content = match fs::read_to_string(&config_path) {
+            Ok(c) => c,
+            Err(_) => {
+                out.push_str(&format!(
+                    r#"<div class="panel" style="display:block; margin-bottom:16px;">
+                        <h3>{} {}</h3>
+                        <p class="meta">{}</p>
+                    </div>"#,
+                    t(locale, "status.server"), server, t(locale, "status.config_not_found")
+                ));
+                continue;
+            }
+        };
 
-    let dump_dir = state.dump_lang_dir(locale);
+        let shiyu_zone = extract_entrance_zone(&config_content, "hadal_zone_scheduled");
+        let da_normal_zone = extract_entrance_zone(&config_content, "boss_challenge_normal");
+        let da_hard_zone = extract_entrance_zone(&config_content, "boss_challenge_hard");
 
-    let shiyu_card = render_status_card(
-        locale, shiyu_zone, "/shiyu/",
-        t(locale, "status.shiyu"),
-        &dump_dir.join("shiyu_details.json"), "shiyu",
-    );
+        let dump_dir = state.dump_lang_dir(locale);
+        let shiyu_details_path = dump_dir.join("shiyu_details.json");
+        let boss_details_path = dump_dir.join("boss_details.json");
 
-    let da_card = render_status_card(
-        locale, da_normal_zone, "/da/",
-        t(locale, "status.da"),
-        &dump_dir.join("boss_details.json"), "da",
-    );
+        let shiyu_card = render_status_card(locale, shiyu_zone, "/shiyu/", t(locale, "status.shiyu"), &shiyu_details_path, "shiyu");
+        let da_card = render_status_card(locale, da_normal_zone, "/da/", t(locale, "status.da"), &boss_details_path, "da");
+        let da_hard_card = render_status_card(locale, da_hard_zone, "/da/", t(locale, "status.da_hardcore"), &boss_details_path, "da");
 
-    let da_hard_card = render_status_card(
-        locale, da_hard_zone, "/da/",
-        t(locale, "status.da_hardcore"),
-        &dump_dir.join("boss_details.json"), "da",
-    );
+        out.push_str(&format!(
+            r#"<div class="panel" style="display:block; margin-bottom:16px;">
+                <h3 style="margin:0 0 14px 0; font-size:16px;">{} {}</h3>
+                <div class="cards">{}{}{}</div>
+            </div>"#,
+            t(locale, "status.server"), server, shiyu_card, da_card, da_hard_card
+        ));
+    }
 
-    format!(
-        r#"<div class="panel" style="display:block;">
-            <h3 style="text-align:center; font-size:16px; margin-bottom:16px;">{} {}</h3>
-            <div class="cards">{}{}{}</div>
-        </div>"#,
-        t(locale, "status.server"), server, shiyu_card, da_card, da_hard_card
-    )
+    out
 }
 
 fn extract_entrance_zone(config: &str, entrance_name: &str) -> u32 {
@@ -467,12 +470,13 @@ fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &s
         );
     }
 
-    let name = lookup_zone_name(details_path, zone_id, kind, locale);
+    let (name, boss_names) = lookup_zone_detail(details_path, zone_id, kind, locale);
+    let boss_list = boss_names.join("<br>");
 
     let mode_html = if kind == "da" {
         let mode = da_mode_label(locale, zone_id);
         let mode_color = if da_mode_label_raw(zone_id) == "hardcore" { "#ef4444" } else { "#c7d1e0" };
-        format!(r#"<div style="font-size:14px; font-weight:600; color:{mode_color}; margin:6px 0;">{mode_label}: {mode}</div>"#,
+        format!(r#"<div style="font-size:14px; font-weight:600; color:{mode_color}; margin-bottom:8px;">{mode_label}: {mode}</div>"#,
             mode_color = mode_color, mode_label = t(locale, "da.mode"), mode = mode)
     } else {
         String::new()
@@ -480,54 +484,43 @@ fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &s
 
     format!(
         r#"<a href="{prefix}{zone}" class="card" style="text-decoration:none;color:inherit;">
-            <h3>{label}</h3>
+            <h3>{label}: {name}</h3>
             {mode_html}
-            <div class="meta">{id_label}: {zone}<br>{name}</div>
+            <div class="meta">{id_label}: {zone}<br>{boss_list}</div>
         </a>"#,
         prefix = link_prefix,
         zone = zone_id,
         label = label,
-        id_label = t(locale, "common.id"),
         name = name,
+        id_label = t(locale, "common.id"),
+        boss_list = boss_list,
     )
 }
 
-fn lookup_zone_name(details_path: &FsPath, zone_id: u32, kind: &str, locale: Locale) -> String {
+fn lookup_zone_detail(details_path: &FsPath, zone_id: u32, kind: &str, locale: Locale) -> (String, Vec<String>) {
     if let Ok(content) = fs::read_to_string(details_path) {
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(entry) = data.get(zone_id.to_string()) {
                 if let Some(name) = entry.get("name").and_then(|n| n.as_str()) {
                     if !name.is_empty() {
-                        return name.to_string();
+                        return (name.to_string(), Vec::new());
                     }
                 }
-                if kind == "shiyu" {
-                    if let Some(zones) = entry.get("zone").and_then(|z| z.as_object()) {
-                        for zone in zones.values() {
-                            if let Some(name) = zone.get("name").and_then(|n| n.as_str()) {
-                                if !name.is_empty() {
-                                    return name.to_string();
-                                }
+                let mut boss_names = Vec::new();
+                if let Some(zones) = entry.get("zone").and_then(|z| z.as_object()) {
+                    for zone in zones.values() {
+                        if let Some(zone_name) = zone.get("name").and_then(|n| n.as_str()) {
+                            if !zone_name.trim().is_empty() {
+                                boss_names.push(zone_name.to_string());
                             }
                         }
-                    }
-                }
-                if kind == "da" {
-                    if let Some(zones) = entry.get("zone").and_then(|z| z.as_object()) {
-                        for zone in zones.values() {
-                            if let Some(name) = zone.get("name").and_then(|n| n.as_str()) {
-                                if !name.is_empty() {
-                                    return name.to_string();
-                                }
-                            }
-                            if let Some(layer_room) = zone.get("layer_room").and_then(|r| r.as_object()) {
-                                for room in layer_room.values() {
-                                    if let Some(monster_list) = room.get("monster_list").and_then(|m| m.as_object()) {
-                                        for monster in monster_list.values() {
-                                            if let Some(monster_name) = monster.get("name").and_then(|n| n.as_str()) {
-                                                if !monster_name.trim().is_empty() {
-                                                    return monster_name.to_string();
-                                                }
+                        if let Some(layer_room) = zone.get("layer_room").and_then(|r| r.as_object()) {
+                            for room in layer_room.values() {
+                                if let Some(monster_list) = room.get("monster_list").and_then(|m| m.as_object()) {
+                                    for monster in monster_list.values() {
+                                        if let Some(monster_name) = monster.get("name").and_then(|n| n.as_str()) {
+                                            if !monster_name.trim().is_empty() {
+                                                boss_names.push(monster_name.to_string());
                                             }
                                         }
                                     }
@@ -536,10 +529,11 @@ fn lookup_zone_name(details_path: &FsPath, zone_id: u32, kind: &str, locale: Loc
                         }
                     }
                 }
+                return (t(locale, "common.unknown").to_string(), boss_names);
             }
         }
     }
-    t(locale, "common.unknown").to_string()
+    (t(locale, "common.unknown").to_string(), Vec::new())
 }
 
 pub(crate) async fn da_detail(
