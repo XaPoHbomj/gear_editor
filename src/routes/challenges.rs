@@ -470,27 +470,17 @@ fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &s
         );
     }
 
-    let (name, boss_names) = lookup_zone_detail(details_path, zone_id, kind, locale);
+    let (_, boss_names) = lookup_zone_detail(details_path, zone_id, kind, locale);
     let boss_list = boss_names.join("<br>");
-
-    let mode_html = if kind == "da" {
-        let mode = da_mode_label(locale, zone_id);
-        let mode_color = if da_mode_label_raw(zone_id) == "hardcore" { "#ef4444" } else { "#c7d1e0" };
-        format!(r#"<div style="font-size:14px; font-weight:600; color:{mode_color}; margin-bottom:8px;">{mode_label}: {mode}</div>"#,
-            mode_color = mode_color, mode_label = t(locale, "da.mode"), mode = mode)
-    } else {
-        String::new()
-    };
 
     format!(
         r#"<a href="{prefix}{zone}" class="card" style="text-decoration:none;color:inherit;">
-            <h3>{name}</h3>
-            {mode_html}
+            <h3>{label}</h3>
             <div class="meta">{id_label}: {zone}<br>{boss_list}</div>
         </a>"#,
         prefix = link_prefix,
         zone = zone_id,
-        name = name,
+        label = label,
         id_label = t(locale, "common.id"),
         boss_list = boss_list,
     )

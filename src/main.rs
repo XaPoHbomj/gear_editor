@@ -229,6 +229,10 @@ async fn dashboard(
         .panel {{ background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
         .panel h3 {{ margin: 0; font-size: 14px; }}
         .panel a {{ display: inline-flex; align-items: center; justify-content: center; margin-top: 16px; padding: 10px 14px; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; text-decoration: none; box-sizing: border-box; }}
+        .panel .card {{ background: #1b1f2a; color: #e6e6e6; display: block; text-decoration: none; border: 1px solid #232a38; border-radius: 12px; padding: 14px; margin-top: 0; font-weight: normal; }}
+        .panel .card h3 {{ margin: 6px 0 8px; font-size: 16px; }}
+        .panel .card .meta {{ color: #9aa4b2; font-size: 12px; }}
+        .panel .cards {{ width: 100%; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }}
         .panel form {{ width: 100%; }}
         .panel label {{ display: block; margin: 12px 0 6px; font-size: 12px; color: #9aa4b2; }}
         .panel input, .panel select {{ width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
