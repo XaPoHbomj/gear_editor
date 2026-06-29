@@ -1,6 +1,5 @@
 use crate::{
     AppState,
-    app_state::{ServerMode, parse_server_mode},
     auth::{
         get_session, html_escape_attr, html_escape_text, insert_session, redirect_to_login,
         remove_session, sanitize_next_path, set_session, url_encode_component, validate_login,
@@ -26,12 +25,6 @@ pub(crate) struct LoginForm {
 pub(crate) struct LoginQuery {
     next: Option<String>,
     error: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct SwitchServerQuery {
-    target: Option<String>,
-    next: Option<String>,
 }
 
 pub(crate) async fn login_page(
@@ -172,40 +165,6 @@ pub(crate) async fn login(
             Redirect::to(&location).into_response()
         }
     };
-
-    response
-}
-
-pub(crate) async fn switch_server(
-    headers: HeaderMap,
-    original_uri: OriginalUri,
-    Query(query): Query<SwitchServerQuery>,
-) -> impl IntoResponse {
-    let Some((session_id, mut session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
-    };
-
-    let mode = parse_server_mode(query.target.as_deref().unwrap_or("beta"));
-    let next = query
-        .next
-        .as_deref()
-        .and_then(sanitize_next_path)
-        .unwrap_or_else(|| "/dashboard".to_string());
-
-    // Pending writes are path-bound; clear them on server switch to avoid cross-server apply.
-    session.pending_writes.clear();
-    set_session(session_id, session);
-
-    let mut response = Redirect::to(&next).into_response();
-    let value = match mode {
-        ServerMode::Beta => "gear_server=beta; Path=/; SameSite=Lax",
-        ServerMode::Prod => "gear_server=prod; Path=/; SameSite=Lax",
-    };
-    if let Ok(header_value) = HeaderValue::from_str(value) {
-        response
-            .headers_mut()
-            .insert(header::SET_COOKIE, header_value);
-    }
 
     response
 }

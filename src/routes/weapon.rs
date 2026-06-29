@@ -1,14 +1,14 @@
 use crate::{
-    app_state::{AppState, state_with_active_server},
-    auth::{get_session, get_session_mut, html_escape_attr, redirect_to_login, set_session},
+    app_state::AppState,
+    auth::{get_session, html_escape_attr, redirect_to_login},
     data::{
         hakushin::{load_hakushin_data, to_asset_url},
         templates::load_weapon_templates,
     },
     i18n::{Locale, locale_from_headers, t},
-    player_state::{read_next_uid, resolve_player_uid},
+    player_state::{load_player_save, resolve_player_uid, save_player_save},
+    remielle_save::WeaponItemSave,
     utils::{audit_log, shared_page_css, svg_data_uri},
-    zon::{ZValue, format_zon_pretty, read_zon, zon_get_number, zon_serialize, zon_set_number},
 };
 use axum::{
     extract::{Form, OriginalUri, Path, Query, State},
@@ -16,7 +16,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use serde::Deserialize;
-use std::{collections::HashMap, fs};
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub(crate) struct WeaponUpdateForm {
@@ -47,19 +47,20 @@ pub(crate) async fn weapon_edit(
     };
 
     let locale = locale_from_headers(&headers);
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
-    let weapon_path = state
-        .state_dir
-        .join(format!("player/{uid}/weapon/{weapon_uid}"));
 
-    let Some(weapon_zon) = read_zon(&weapon_path) else {
+    let Some(save) = load_player_save(&state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
     };
 
-    let level = zon_get_number(&weapon_zon, "level").unwrap_or(1) as u32;
-    let refine_level = zon_get_number(&weapon_zon, "refine_level").unwrap_or(1) as u32;
-    let weapon_id = zon_get_number(&weapon_zon, "id").unwrap_or(0) as u32;
+    let Some(weapon) = save.weapon.iter().find(|w| w.uid == weapon_uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
+    };
+
+    let level = weapon.level;
+    let refine_level = weapon.refine;
+    let weapon_id = weapon.id;
     let hakushin = load_hakushin_data(&state, locale);
     let weapon_name = hakushin
         .weapons
@@ -131,27 +132,26 @@ pub(crate) async fn weapon_update(
     original_uri: OriginalUri,
     Form(payload): Form<WeaponUpdateForm>,
 ) -> impl IntoResponse {
-    let Some((session_id, mut session)) = get_session_mut(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
     let locale = locale_from_headers(&headers);
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
-    let weapon_path = state
-        .state_dir
-        .join(format!("player/{uid}/weapon/{weapon_uid}"));
 
-    let Some(mut weapon_zon) = read_zon(&weapon_path) else {
+    let Some(mut save) = load_player_save(&state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
     };
 
-    zon_set_number(&mut weapon_zon, "level", payload.level as i64);
-    zon_set_number(&mut weapon_zon, "refine_level", payload.refine_level as i64);
+    let Some(weapon) = save.weapon.iter_mut().find(|w| w.uid == weapon_uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
+    };
 
-    let serialized = zon_serialize(&weapon_zon);
-    session.pending_writes.insert(weapon_path, serialized);
-    set_session(session_id, session);
+    weapon.level = payload.level;
+    weapon.refine = payload.refine_level;
+
+    save_player_save(&state, uid, &save);
 
     Redirect::to("/dashboard?tab=weapons").into_response()
 }
@@ -263,84 +263,44 @@ pub(crate) async fn weapon_add(
     original_uri: OriginalUri,
     Form(payload): Form<AddWeaponForm>,
 ) -> impl IntoResponse {
-    let Some((session_id, session)) = get_session_mut(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
     let locale = locale_from_headers(&headers);
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
-    let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
-    let next_uid = read_next_uid(&weapon_dir).unwrap_or(1);
+
+    let mut save = load_player_save(&state, uid).unwrap_or_default();
+
+    let next_uid = save.weapon.iter().map(|w| w.uid).max().unwrap_or(0) + 1;
     let new_uid = next_uid.max(1);
 
-    let weapon = ZValue::Object(vec![
-        ("id".to_string(), ZValue::Number(payload.weapon_id as i64)),
-        ("level".to_string(), ZValue::Number(60)),
-        ("exp".to_string(), ZValue::Number(0)),
-        ("star".to_string(), ZValue::Number(5)),
-        (
-            "refine_level".to_string(),
-            ZValue::Number(payload.refine_level as i64),
-        ),
-        ("lock".to_string(), ZValue::Bool(false)),
-    ]);
+    let weapon = WeaponItemSave {
+        uid: new_uid,
+        id: payload.weapon_id,
+        level: 60,
+        star: 5,
+        refine: payload.refine_level,
+    };
 
-    let weapon_path = weapon_dir.join(new_uid.to_string());
-    let serialized = format_zon_pretty(&zon_serialize(&weapon));
-    if let Some(parent) = weapon_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Err(err) = fs::write(&weapon_path, serialized) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("{}: {}", t(locale, "disc.failed_create"), err)),
-        )
-            .into_response();
-    }
-
-    let next_path = weapon_dir.join("next");
-    if let Err(err) = fs::write(&next_path, format!("{}\n", new_uid + 1)) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("{}: {}", t(locale, "disc.failed_counter"), err)),
-        )
-            .into_response();
-    }
+    save.weapon.push(weapon);
+    save_player_save(&state, uid, &save);
 
     audit_log(&state.root_dir, &session.username, session.uid, "weapon_add", &format!("created weapon {}", new_uid));
-    set_session(session_id, session);
     Redirect::to(&format!("/weapon/{new_uid}")).into_response()
 }
 
 pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale, filter_class: &str, filter_rarity: &str) -> String {
-    let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
     let weapon_templates = load_weapon_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
 
     let mut cards = String::new();
-    if let Ok(entries) = fs::read_dir(&weapon_dir) {
-        for entry in entries.flatten() {
-            let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
-                continue;
-            };
-            let weapon_uid = match file_name
-                .strip_suffix(".zon")
-                .unwrap_or(&file_name)
-                .parse::<u32>()
-            {
-                Ok(value) if value > 0 => value,
-                _ => continue,
-            };
-            let weapon = read_zon(&entry.path());
-            let weapon_id = weapon
-                .as_ref()
-                .and_then(|v| zon_get_number(v, "id"))
-                .unwrap_or(0) as u32;
-            let level = weapon
-                .as_ref()
-                .and_then(|v| zon_get_number(v, "level"))
-                .unwrap_or(0);
+    if let Some(save) = load_player_save(state, uid) {
+        for weapon in &save.weapon {
+            let weapon_uid = weapon.uid;
+            let weapon_id = weapon.id;
+            let level = weapon.level;
 
             let info = hakushin.weapon_info.get(&weapon_id);
 

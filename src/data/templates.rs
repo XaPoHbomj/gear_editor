@@ -2,9 +2,8 @@ use crate::{
     app_state::AppState,
     data::hakushin::load_hakushin_data,
     i18n::{Locale, t},
-    zon::{read_zon, zon_get_number},
+    zon::{read_zon, zon_get_number, zon_parse_entries},
 };
-use serde_json::Value as JsonValue;
 use std::{collections::HashMap, fs, path::Path as FsPath, sync::OnceLock};
 
 static EQUIP_TEMPLATE: OnceLock<EquipTemplateIndex> = OnceLock::new();
@@ -24,38 +23,24 @@ pub(crate) struct EquipTemplateInfo {
 pub(crate) fn load_equip_template_index(asset_dir: &FsPath) -> &'static EquipTemplateIndex {
     EQUIP_TEMPLATE.get_or_init(|| {
         let mut index = EquipTemplateIndex::default();
-        let path = asset_dir.join("EquipmentTemplateTb.json");
-        let Ok(data) = fs::read_to_string(path) else {
+        let path = asset_dir.join("EquipmentTemplateTb.zon");
+        let Ok(data) = fs::read_to_string(&path) else {
             return index;
         };
-        let Ok(json) = serde_json::from_str::<JsonValue>(&data) else {
-            return index;
-        };
-        let Some(items) = json.get("data").and_then(|v| v.as_array()) else {
-            return index;
-        };
-
-        for item in items {
-            let Some(item_id) = item.get("item_id").and_then(|v| v.as_u64()) else {
+        for entry in zon_parse_entries(&data) {
+            let Some(item_id) = entry.get("item_id").or_else(|| entry.get("id")).and_then(|v| v.parse::<u32>().ok()) else {
                 continue;
             };
-            let Some(slot) = item.get("equipment_type").and_then(|v| v.as_u64()) else {
+            let Some(slot) = entry.get("equipment_type").and_then(|v| v.parse::<u32>().ok()) else {
                 continue;
             };
-            let Some(suit_type) = item.get("suit_type").and_then(|v| v.as_u64()) else {
+            let Some(suit_type) = entry.get("suit_type").and_then(|v| v.parse::<u32>().ok()) else {
                 continue;
             };
-            let info = EquipTemplateInfo {
-                suit_type: suit_type as u32,
-                slot: slot as u32,
-            };
-            index.by_item.insert(item_id as u32, info);
-            index
-                .by_suit_slot
-                .entry((info.suit_type, info.slot))
-                .or_insert(item_id as u32);
+            let info = EquipTemplateInfo { suit_type, slot };
+            index.by_item.insert(item_id, info);
+            index.by_suit_slot.entry((info.suit_type, info.slot)).or_insert(item_id);
         }
-
         index
     })
 }
@@ -99,15 +84,51 @@ pub(crate) fn resolve_equip_item_id(
 }
 
 pub(crate) fn load_avatar_templates(asset_dir: &FsPath) -> HashMap<u32, String> {
-    let path = asset_dir.join("AvatarBaseTemplateTb.json");
-    let data = fs::read_to_string(path).unwrap_or_default();
-    parse_json_map(&data, "id", "name")
+    let path = asset_dir.join("AvatarBaseTemplateTb.zon");
+    let Ok(data) = fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    zon_parse_entries(&data)
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(|v| v.parse::<u32>().ok())?;
+            Some((id, format!("{id}")))
+        })
+        .collect()
 }
 
 pub(crate) fn load_weapon_templates(asset_dir: &FsPath) -> HashMap<u32, String> {
-    let path = asset_dir.join("WeaponTemplateTb.json");
-    let data = fs::read_to_string(path).unwrap_or_default();
-    parse_json_map(&data, "item_id", "weapon_name")
+    let path = asset_dir.join("WeaponTemplateTb.zon");
+    let Ok(data) = fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    zon_parse_entries(&data)
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(|v| v.parse::<u32>().ok())?;
+            Some((id, format!("{id}")))
+        })
+        .collect()
+}
+
+pub(crate) fn load_avatar_template_entries(asset_dir: &FsPath) -> Vec<HashMap<String, String>> {
+    let path = asset_dir.join("AvatarBaseTemplateTb.zon");
+    let Ok(data) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    zon_parse_entries(&data)
+}
+
+pub(crate) fn load_buddy_template_ids(asset_dir: &FsPath) -> Vec<u32> {
+    let path = asset_dir.join("BuddyBaseTemplateTb.zon");
+    let Ok(data) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    zon_parse_entries(&data)
+        .into_iter()
+        .filter_map(|entry| entry.get("id").and_then(|v| v.parse::<u32>().ok()))
+        .filter(|id| *id < 55000)
+        .collect()
 }
 
 pub(crate) fn load_player_weapons(
@@ -115,37 +136,19 @@ pub(crate) fn load_player_weapons(
     uid: u32,
     locale: Locale,
 ) -> Vec<(u32, String)> {
-    let weapon_dir = state.state_dir.join(format!("player/{uid}/weapon"));
+    let save = crate::player_state::load_player_save(state, uid).unwrap_or_default();
     let weapon_templates = load_weapon_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
     let mut result = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(&weapon_dir) {
-        for entry in entries.flatten() {
-            let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
-                continue;
-            };
-            let uid = match file_name
-                .strip_suffix(".zon")
-                .unwrap_or(&file_name)
-                .parse::<u32>()
-            {
-                Ok(value) if value > 0 => value,
-                _ => continue,
-            };
-            let weapon = read_zon(&entry.path());
-            let weapon_id = weapon
-                .as_ref()
-                .and_then(|v| zon_get_number(v, "id"))
-                .unwrap_or(0) as u32;
-            let name = hakushin
-                .weapons
-                .get(&weapon_id)
-                .map(|entry| entry.name.clone())
-                .or_else(|| weapon_templates.get(&weapon_id).cloned())
-                .unwrap_or_else(|| format!("{} {weapon_id}", t(locale, "fallback.weapon")));
-            result.push((uid, format!("{} (UID {})", name, uid)));
-        }
+    for weapon in &save.weapon {
+        let name = hakushin
+            .weapons
+            .get(&weapon.id)
+            .map(|entry| entry.name.clone())
+            .or_else(|| weapon_templates.get(&weapon.id).cloned())
+            .unwrap_or_else(|| format!("{} {}", t(locale, "fallback.weapon"), weapon.id));
+        result.push((weapon.uid, format!("{} (UID {})", name, weapon.uid)));
     }
 
     result.sort_by_key(|(uid, _)| *uid);
@@ -177,14 +180,29 @@ pub(crate) fn render_weapon_select(
 }
 
 pub(crate) fn load_equip_templates(asset_dir: &FsPath) -> HashMap<u32, String> {
-    let equip_path = asset_dir.join("EquipmentTemplateTb.json");
-    let suit_path = asset_dir.join("EquipmentSuitTemplateTb.json");
+    let equip_path = asset_dir.join("EquipmentTemplateTb.zon");
+    let suit_path = asset_dir.join("EquipmentSuitTemplateTb.zon");
 
-    let equip_data = fs::read_to_string(equip_path).unwrap_or_default();
-    let suit_data = fs::read_to_string(suit_path).unwrap_or_default();
+    let equip_data = fs::read_to_string(&equip_path).unwrap_or_default();
+    let suit_data = fs::read_to_string(&suit_path).unwrap_or_default();
 
-    let equip_to_suit = parse_json_map_u32(&equip_data, "item_id", "suit_type");
-    let suit_names = parse_json_map(&suit_data, "id", "name");
+    let equip_to_suit: HashMap<u32, u32> = zon_parse_entries(&equip_data)
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(|v| v.parse::<u32>().ok())?;
+            let suit_type = entry.get("suit_type").and_then(|v| v.parse::<u32>().ok())?;
+            Some((id, suit_type))
+        })
+        .collect();
+
+    let suit_names: HashMap<u32, String> = zon_parse_entries(&suit_data)
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(|v| v.parse::<u32>().ok())?;
+            let name = entry.get("name").cloned().unwrap_or_else(|| format!("{id}"));
+            Some((id, name))
+        })
+        .collect();
 
     let mut result = HashMap::new();
     for (item_id, suit_id) in equip_to_suit {
@@ -203,40 +221,22 @@ pub(crate) fn load_player_equips(
     uid: u32,
     locale: Locale,
 ) -> Vec<(u32, u32, String)> {
-    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
+    let save = crate::player_state::load_player_save(state, uid).unwrap_or_default();
     let equip_templates = load_equip_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
     let mut result = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(&equip_dir) {
-        for entry in entries.flatten() {
-            let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
-                continue;
-            };
-            let uid = match file_name
-                .strip_suffix(".zon")
-                .unwrap_or(&file_name)
-                .parse::<u32>()
-            {
-                Ok(value) if value > 0 => value,
-                _ => continue,
-            };
-            let equip = read_zon(&entry.path());
-            let equip_item_id = equip
-                .as_ref()
-                .and_then(|v| zon_get_number(v, "id"))
-                .unwrap_or(0) as u32;
-            let set_id = equip_set_id(equip_item_id, equip_index);
-            let name = hakushin
-                .discs
-                .get(&set_id)
-                .map(|entry| entry.name.clone())
-                .or_else(|| equip_templates.get(&equip_item_id).cloned())
-                .unwrap_or_else(|| format!("{} {equip_item_id}", t(locale, "fallback.disc")));
-            let slot = equip_slot(equip_item_id, equip_index);
-            result.push((uid, slot, format!("{} (UID {})", name, uid)));
-        }
+    for equip in &save.equip {
+        let set_id = equip_set_id(equip.id, equip_index);
+        let name = hakushin
+            .discs
+            .get(&set_id)
+            .map(|entry| entry.name.clone())
+            .or_else(|| equip_templates.get(&equip.id).cloned())
+            .unwrap_or_else(|| format!("{} {}", t(locale, "fallback.disc"), equip.id));
+        let slot = equip_slot(equip.id, equip_index);
+        result.push((equip.uid, slot, format!("{} (UID {})", name, equip.uid)));
     }
 
     result.sort_by_key(|(uid, _, _)| *uid);
@@ -278,48 +278,4 @@ pub(crate) fn render_equip_selects(
     }
 
     html
-}
-
-fn parse_json_map(data: &str, key: &str, value: &str) -> HashMap<u32, String> {
-    let mut result = HashMap::new();
-    let Ok(json) = serde_json::from_str::<JsonValue>(data) else {
-        return result;
-    };
-
-    let Some(items) = json.get("data").and_then(|v| v.as_array()) else {
-        return result;
-    };
-
-    for item in items {
-        let Some(id) = item.get(key).and_then(|v| v.as_u64()) else {
-            continue;
-        };
-        if let Some(name) = item.get(value).and_then(|v| v.as_str()) {
-            result.insert(id as u32, name.to_string());
-        }
-    }
-
-    result
-}
-
-fn parse_json_map_u32(data: &str, key: &str, value: &str) -> HashMap<u32, u32> {
-    let mut result = HashMap::new();
-    let Ok(json) = serde_json::from_str::<JsonValue>(data) else {
-        return result;
-    };
-
-    let Some(items) = json.get("data").and_then(|v| v.as_array()) else {
-        return result;
-    };
-
-    for item in items {
-        let Some(id) = item.get(key).and_then(|v| v.as_u64()) else {
-            continue;
-        };
-        if let Some(value) = item.get(value).and_then(|v| v.as_u64()) {
-            result.insert(id as u32, value as u32);
-        }
-    }
-
-    result
 }

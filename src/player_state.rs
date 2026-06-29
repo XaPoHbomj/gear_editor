@@ -2,38 +2,23 @@ use crate::{
     app_state::AppState,
     domain::discs::stat_label,
     i18n::{Locale, t},
-    zon::{read_zon, zon_get_number},
+    remielle_save::{self, PlayerSave},
 };
 use std::{
     fs,
     path::{Path as FsPath, PathBuf},
 };
 
-pub(crate) fn read_next_uid(dir: &FsPath) -> Option<u32> {
-    let next_path = dir.join("next");
-    if let Ok(value) = fs::read_to_string(&next_path) {
-        if let Ok(parsed) = value.trim().parse::<u32>() {
-            return Some(parsed);
-        }
-    }
+pub(crate) fn load_player_save(state: &AppState, uid: u32) -> Option<PlayerSave> {
+    let path = state.state_dir.join(format!("USD_{uid}.bin"));
+    let data = fs::read(&path).ok()?;
+    remielle_save::decode_player_save(&data)
+}
 
-    let mut max_id = 0u32;
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let file_name = entry.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            let Ok(id) = name.trim().parse::<u32>() else {
-                continue;
-            };
-            if id > max_id {
-                max_id = id;
-            }
-        }
-    }
-
-    Some(max_id.saturating_add(1).max(1))
+pub(crate) fn save_player_save(state: &AppState, uid: u32, save: &PlayerSave) {
+    let path = state.state_dir.join(format!("USD_{uid}.bin"));
+    let data = remielle_save::encode_player_save(save);
+    let _ = fs::write(&path, &data);
 }
 
 pub(crate) fn render_stat_select_options(
@@ -193,37 +178,38 @@ pub(crate) fn parse_slot_value(value: &str) -> u32 {
 }
 
 pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> u32 {
-    let account_path = state.state_dir.join(format!("account/{account_uid}"));
-
-    if let Some(account_zon) = read_zon(&account_path) {
-        if let Some(player_uid) = zon_get_number(&account_zon, "player_uid") {
-            return player_uid as u32;
-        }
-    }
-
-    let direct_path = state.state_dir.join(format!("player/{account_uid}"));
-    if direct_path.exists() {
-        return account_uid as u32;
-    }
-
-    let player_root = state.state_dir.join("player");
-    if let Ok(entries) = fs::read_dir(player_root) {
-        for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_dir() {
-                continue;
-            }
-            if let Some(name) = entry.file_name().to_str() {
-                if let Ok(uid) = name.parse::<u32>() {
-                    return uid;
+    let map_path = state.state_dir.join("GENERAL_DATA.bin");
+    if let Ok(data) = fs::read(&map_path) {
+        if data.len() >= 8 && data.len() % 8 == 0 {
+            let count = data.len() / 8;
+            for i in 0..count {
+                let start = i * 8;
+                let uid_bytes: [u8; 8] = data[start..start + 8].try_into().unwrap();
+                let mapped_uid = u64::from_le_bytes(uid_bytes);
+                if mapped_uid == account_uid as u64 {
+                    return 666 + i as u32;
                 }
             }
         }
     }
 
-    account_uid.max(1) as u32
+    let dir_scan = state.state_dir.clone();
+    if let Ok(entries) = fs::read_dir(&dir_scan) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("USD_") && name_str.ends_with(".bin") {
+                let uid_str = &name_str[4..name_str.len() - 4];
+                if let Ok(uid) = uid_str.parse::<u32>() {
+                    if uid > 0 {
+                        return uid;
+                    }
+                }
+            }
+        }
+    }
+
+    account_uid.max(666) as u32
 }
 
 pub(crate) fn resolve_item_path(state_dir: &FsPath, uid: u32, kind: &str, item_id: u32) -> PathBuf {

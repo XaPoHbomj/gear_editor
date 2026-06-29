@@ -17,25 +17,23 @@ mod data;
 mod domain;
 mod i18n;
 mod player_state;
+mod remielle_save;
 mod routes;
 mod updates;
 mod utils;
 mod zon;
 
-use app_state::{AppState, ServerMode, active_server_mode, state_with_active_server};
+use app_state::AppState;
 use assets::asset_handler;
 use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_encode_component};
 use config::{load_sdk_config, resolve_db_path, resolve_sdk_config_path};
 use i18n::{Locale, locale_from_headers, t};
 use player_state::resolve_player_uid;
-use routes::auth::{login, login_page, logout, switch_server};
-use routes::admin::{admin_delete_update, admin_upload_update};
+use routes::auth::{login, login_page, logout};
 use routes::avatar::{avatar_add_all, avatar_edit, avatar_update, render_avatar_cards};
 use routes::bangboo::{bangboo_add_all, bangboo_edit, bangboo_update, render_bangboo_cards};
-use routes::challenges::{
-    da_detail, da_select, da_shiyu_update, render_da_panel, render_shiyu_panel, shiyu_detail,
-    shiyu_select,
-};
+use routes::challenges::{da_detail, render_da_shiyu_status, shiyu_detail};
+use routes::admin::{admin_delete_update, admin_upload_update};
 use routes::equip::{
     equip_add, equip_delete_all_unlocked, equip_delete_submit, equip_edit, equip_generate,
     equip_generate_submit, equip_lock_selected, equip_new, equip_update, render_equip_cards,
@@ -56,6 +54,7 @@ struct TabQuery {
     page: Option<String>,
     weapon_class: Option<String>,
     weapon_rarity: Option<String>,
+    server: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -73,16 +72,10 @@ async fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let state_dir = env::var("GEAR_STATE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("yoshunko/state"));
-    let prod_state_dir = env::var("GEAR_STATE_DIR_PROD")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("yoshunko_prod/state"));
+        .unwrap_or_else(|_| root.join("bin_remielle/Persistent/LocalStorage"));
     let asset_dir = env::var("GEAR_ASSET_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("yoshunko/assets/Filecfg"));
-    let prod_asset_dir = env::var("GEAR_ASSET_DIR_PROD")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("yoshunko_prod/assets/Filecfg"));
+        .unwrap_or_else(|_| root.join("bin_remielle/assets/filecfg"));
     let dump_dir = env::var("ZZZ_DUMP_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("zzz_dump/latest"));
@@ -90,9 +83,7 @@ async fn main() {
     let state = AppState {
         db_path,
         state_dir,
-        prod_state_dir,
         asset_dir,
-        prod_asset_dir,
         dump_dir,
         root_dir: root,
     };
@@ -101,7 +92,6 @@ async fn main() {
         .route("/", get(login_page))
         .route("/login", post(login))
         .route("/dashboard", get(dashboard))
-        .route("/switch-server", get(switch_server))
         .route("/logout", get(logout))
         .route("/avatar/:id", get(avatar_edit).post(avatar_update))
         .route("/avatar/add-all", post(avatar_add_all))
@@ -124,17 +114,14 @@ async fn main() {
         .route("/admin/upload-update", post(admin_upload_update).layer(DefaultBodyLimit::disable()))
         .route("/admin/delete-update", post(admin_delete_update))
         .route("/da/:id", get(da_detail))
-        .route("/da/:id/select", post(da_select))
         .route("/shiyu/:id", get(shiyu_detail))
-        .route("/shiyu/:id/select", post(shiyu_select))
-        .route("/da-shiyu", post(da_shiyu_update))
         .route("/apply", post(apply_changes))
         .route("/set-lang", get(set_language))
         .route("/assets/*path", get(asset_handler))
         .layer(CompressionLayer::new())
         .with_state(state);
 
-    let addr = env::var("GEAR_EDITOR_ADDR").unwrap_or_else(|_| "0.0.0.0:18080".to_string());
+    let addr = env::var("GEAR_EDITOR_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("Failed to bind GEAR_EDITOR_ADDR");
@@ -163,7 +150,7 @@ async fn dashboard(
         return redirect_to_login(&original_uri.0);
     };
 
-    let tab = query.tab.unwrap_or_else(|| "da".to_string());
+    let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
     let delete_mode = query.delete.unwrap_or(0) == 1;
     let lock_mode = query.lock.unwrap_or(0) == 1;
     let filter_set_id = query.set_id.and_then(|s| s.parse::<u32>().ok());
@@ -172,37 +159,18 @@ async fn dashboard(
     let filter_page = query.page.and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
     let filter_weapon_class = query.weapon_class.unwrap_or_default();
     let filter_weapon_rarity = query.weapon_rarity.unwrap_or_default();
-    let current_mode = active_server_mode(&headers);
-    let active_state = state_with_active_server(&state, &headers);
-    let uid = resolve_player_uid(&active_state, session.uid);
-    let beta_version = state.read_version(false);
-    let prod_version = state.read_version(true);
+    let uid = resolve_player_uid(&state, session.uid);
+    let version = state.read_version();
     let is_admin = is_admin(&session);
-    let server_host = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("localhost:18080");
 
     let pending_count = session.pending_writes.len();
     let locale = locale_from_headers(&headers);
-    let next = sanitize_next_path(
-        original_uri
-            .0
-            .path_and_query()
-            .map(|pq| pq.as_str())
-            .unwrap_or("/dashboard"),
-    )
-    .unwrap_or_else(|| "/dashboard".to_string());
-    let switch_beta_href = format!(
-        "/switch-server?target=beta&next={}",
-        url_encode_component(&next)
-    );
-    let switch_prod_href = format!(
-        "/switch-server?target=prod&next={}",
-        url_encode_component(&next)
-    );
+    let server_host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost:3001");
 
-    let encoded_next = url_encode_component(&next);
+    let encoded_next = url_encode_component("/dashboard");
     let mut lang_opts = String::new();
     for lang in Locale::all() {
         let selected = if locale == *lang { " selected" } else { "" };
@@ -218,6 +186,20 @@ async fn dashboard(
         next = encoded_next,
         opts = lang_opts,
     );
+
+    let tab_avatars = if tab == "avatars" { "active" } else { "" };
+    let tab_weapons = if tab == "weapons" { "active" } else { "" };
+    let tab_discs = if tab == "discs" { "active" } else { "" };
+    let tab_bangboos = if tab == "bangboos" { "active" } else { "" };
+    let tab_updates = if tab == "updates" { "active" } else { "" };
+    let tab_status = if tab == "status" { "active" } else { "" };
+    let server = query.server.unwrap_or(1).clamp(1, 3);
+
+    let title_suffix = if version.is_empty() {
+        format!(" — Remielle")
+    } else {
+        format!(" — Remielle {version}")
+    };
 
     let body = format!(
         r#"<!doctype html>
@@ -244,8 +226,7 @@ async fn dashboard(
     .card h3 {{ margin: 6px 0 8px; font-size: 16px; }}
     .thumb {{ display: block; width: 100%; height: 160px; object-fit: cover; object-position: top; border-radius: 8px; background: #0f1115; border: 1px solid #2a3140; }}
     .cards .card .thumb + .pill {{ margin-top: 8px; }}
-    .boss-thumb-shiyu {{ display: block; width: 180px; min-width: 180px; flex: 0 0 180px; align-self: stretch; min-height: 0; background-color: #10141d; background-size: cover; background-repeat: no-repeat; background-position: center bottom; border-radius: 8px; }}
-    .boss-thumb-da {{ display: block; width: 220px; min-width: 220px; flex: 0 0 220px; align-self: stretch; min-height: 0; background-color: #10141d; background-size: cover; background-repeat: no-repeat; background-position: center bottom; border-radius: 8px; }}
+
     .meta {{ color: #9aa4b2; font-size: 12px; }}
         .panel {{ background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
         .panel h3 {{ margin: 0; font-size: 14px; }}
@@ -301,15 +282,16 @@ async fn dashboard(
         <span></span>
     </button>
     <div class="desktop-tabs tabs">
-        <a class="{tab_da}" href="/dashboard?tab=da">{nav_deadly_assault}</a>
-        <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">{nav_shiyu}</a>
+        <a class="{tab_avatars}" href="/dashboard?tab=avatars">{nav_characters}</a>
+        <a class="{tab_weapons}" href="/dashboard?tab=weapons">{nav_weapons}</a>
+        <a class="{tab_discs}" href="/dashboard?tab=discs">{nav_discs}</a>
+        <a class="{tab_bangboos}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
         <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
+        <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     </div>
     <div class="desktop-actions" style="display:flex; align-items:center; gap:10px;">
         <div class="meta">{signed_in_as} {username}</div>
         <div class="lang-select">{lang_selector}</div>
-        <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta}</a>
-        <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod}</a>
         <a href="/logout" class="desktop-logout" style="padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
         <form method="post" action="/apply" style="margin:0;">
             <input type="hidden" name="session" value="{session_id}" />
@@ -319,16 +301,15 @@ async fn dashboard(
 </header>
 <div class="mobile-overlay" onclick="this.classList.remove('open'); document.querySelector('.mobile-drawer').classList.remove('open');"></div>
 <aside class="mobile-drawer tabs" aria-hidden="true">
-    <a class="{tab_da}" href="/dashboard?tab=da">{nav_deadly_assault}</a>
-    <a class="{tab_shiyu}" href="/dashboard?tab=shiyu">{nav_shiyu}</a>
+    <a class="{tab_avatars}" href="/dashboard?tab=avatars">{nav_characters}</a>
+    <a class="{tab_weapons}" href="/dashboard?tab=weapons">{nav_weapons}</a>
+    <a class="{tab_discs}" href="/dashboard?tab=discs">{nav_discs}</a>
+    <a class="{tab_bangboos}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
     <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
+    <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px; width:100%; box-sizing:border-box;">
         <div class="meta">{signed_in_as} {username}</div>
         {lang_selector}
-        <div style="display:flex; gap:4px; width:100%;">
-            <a href="{switch_beta_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta_mobile}</a>
-            <a href="{switch_prod_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod_mobile}</a>
-        </div>
         <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
     </div>
 </aside>
@@ -339,72 +320,37 @@ async fn dashboard(
 </main>
 </body>
 </html>"#,
-        tab_da = if tab == "da" { "active" } else { "" },
-        tab_shiyu = if tab == "shiyu" { "active" } else { "" },
-        tab_updates = if tab == "updates" { "active" } else { "" },
+        tab_avatars = tab_avatars,
+        tab_weapons = tab_weapons,
+        tab_discs = tab_discs,
+        tab_bangboos = tab_bangboos,
+        tab_status = tab_status,
+
         content = match tab.as_str() {
-            "weapons" => render_weapon_cards(&active_state, uid, locale, &filter_weapon_class, &filter_weapon_rarity),
-            "discs" => render_equip_cards(&active_state, uid, delete_mode, lock_mode, locale, filter_set_id, filter_slot, filter_main_stat, query.status.as_deref(), filter_page),
-            "bangboos" => render_bangboo_cards(&active_state, uid, locale),
+            "weapons" => render_weapon_cards(&state, uid, locale, &filter_weapon_class, &filter_weapon_rarity),
+            "discs" => render_equip_cards(&state, uid, delete_mode, lock_mode, locale, filter_set_id, filter_slot, filter_main_stat, query.status.as_deref(), filter_page),
+            "bangboos" => render_bangboo_cards(&state, uid, locale),
+
             "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-            "da" => render_da_panel(&active_state, uid, locale),
-            "shiyu" => render_shiyu_panel(&active_state, uid, locale),
-            _ => render_avatar_cards(&active_state, uid, locale),
+            "status" => render_status_tab(&state, uid, locale, server),
+            _ => render_avatar_cards(&state, uid, locale),
         },
         session_id = session_id,
         username = session.username,
         pending_count = pending_count,
-        switch_beta_href = switch_beta_href,
-        switch_prod_href = switch_prod_href,
         lang_selector = lang_selector,
         lang_attr = locale.lang_attr(),
-        title_suffix = {
-            let mode = match current_mode {
-                ServerMode::Beta => "Beta",
-                ServerMode::Prod => "Prod",
-            };
-            let version = match current_mode {
-                ServerMode::Beta => &beta_version,
-                ServerMode::Prod => &prod_version,
-            };
-            if version.is_empty() {
-                format!(" — {mode}")
-            } else {
-                format!(" — {mode} {version}")
-            }
-        },
-        nav_deadly_assault = t(locale, "nav.deadly_assault"),
-        nav_shiyu = t(locale, "nav.shiyu"),
+        title_suffix = title_suffix,
+        nav_characters = t(locale, "nav.characters"),
+        nav_weapons = t(locale, "nav.weapons"),
+        nav_discs = t(locale, "nav.discs"),
+        nav_bangboos = t(locale, "nav.bangboos"),
+
         nav_client_updates = t(locale, "nav.client_updates"),
+        nav_status = t(locale, "nav.status"),
         signed_in_as = t(locale, "header.signed_in_as"),
         apply_changes = t(locale, "header.apply_changes"),
-        header_beta = {
-            let v = &beta_version;
-            if v.is_empty() { t(locale, "header.beta").to_string() } else { format!("{} {}", t(locale, "header.beta"), v) }
-        },
-        header_prod = {
-            let v = &prod_version;
-            if v.is_empty() { t(locale, "header.prod").to_string() } else { format!("{} {}", t(locale, "header.prod"), v) }
-        },
-        header_beta_mobile = {
-            let v = &beta_version;
-            if v.is_empty() { t(locale, "header.beta").to_string() } else { format!("{} {}", t(locale, "header.beta"), v) }
-        },
-        header_prod_mobile = {
-            let v = &prod_version;
-            if v.is_empty() { t(locale, "header.prod").to_string() } else { format!("{} {}", t(locale, "header.prod"), v) }
-        },
         logout_label = t(locale, "header.logout"),
-        beta_active = if current_mode == ServerMode::Beta {
-            "background:#4c7dff;color:#fff;"
-        } else {
-            "background:#2a3140;color:#c7d1e0;"
-        },
-        prod_active = if current_mode == ServerMode::Prod {
-            "background:#4c7dff;color:#fff;"
-        } else {
-            "background:#2a3140;color:#c7d1e0;"
-        },
     );
 
     Html(body).into_response()
@@ -429,4 +375,22 @@ async fn set_language(
         .headers_mut()
         .insert(header::SET_COOKIE, header_value);
     response
+}
+
+fn render_status_tab(state: &AppState, uid: u32, locale: Locale, server: u32) -> String {
+    let server_tabs = (1..=3).map(|s| {
+        let active = if s == server { "active" } else { "" };
+        let label = t(locale, "status.server");
+        format!(
+            r#"<a href="/dashboard?tab=status&server={s}" class="{active}" style="margin-right: 0; padding: 8px 12px; border-radius: 8px; text-decoration: none; font-weight: 600; {style}">{label} {s}</a>"#,
+            style = if s == server { "background: #4c7dff; color: #fff;" } else { "background: #2a3140; color: #c7d1e0;" }
+        )
+    }).collect::<Vec<_>>().join("");
+
+    let content = render_da_shiyu_status(state, uid, locale, server);
+
+    format!(
+        r#"<div class="tabs" style="margin-bottom: 16px;">{server_tabs}</div>
+        {content}"#
+    )
 }

@@ -1,6 +1,6 @@
 use crate::{
-    app_state::{AppState, state_with_active_server},
-    auth::{get_session, get_session_mut, html_escape_attr, redirect_to_login, set_session},
+    app_state::AppState,
+    auth::{get_session, html_escape_attr, redirect_to_login},
     data::{
         hakushin::{load_hakushin_data, to_asset_url},
         templates::{
@@ -14,28 +14,25 @@ use crate::{
     },
     i18n::{Locale, locale_from_headers, t},
     player_state::{
-        parse_slot_value, read_next_uid, render_equip_substat_script, render_slot_options,
-        render_stat_select_options, render_sub_stat_rows, resolve_player_uid,
+        load_player_save, parse_slot_value, render_equip_substat_script, render_slot_options,
+        render_stat_select_options, render_sub_stat_rows, resolve_player_uid, save_player_save,
     },
     utils::{audit_log, shared_page_css, svg_data_uri},
-    zon::{
-        ZValue, format_zon_pretty, read_zon, zon_get_bool, zon_get_main_property, zon_get_number,
-        zon_get_sub_properties_list, zon_serialize, zon_set_bool, zon_set_main_property,
-        zon_set_number, zon_set_sub_properties,
-    },
 };
 use axum::{
     extract::{Form, OriginalUri, Path, RawForm, State},
     http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Redirect},
 };
 use rand::{Rng, seq::SliceRandom};
+use crate::remielle_save::{EquipItemSave, EquipProperty, PlayerSave};
 use serde::Deserialize;
-use std::{collections::HashMap, fs};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Deserialize)]
 pub(crate) struct EquipUpdateForm {
     level: u32,
+    star: u32,
     main_key: u32,
     sub_key_1: u32,
     sub_proc_1: u32,
@@ -45,8 +42,6 @@ pub(crate) struct EquipUpdateForm {
     sub_proc_3: u32,
     sub_key_4: u32,
     sub_proc_4: u32,
-    #[serde(default)]
-    lock: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -71,21 +66,18 @@ pub(crate) struct GenerateEquipForm {
     count: u32,
 }
 
-const MAX_DISCS: usize = 500;
+const MAX_DISCS: usize = 3000;
 
-fn count_equip_files(equip_dir: &std::path::Path) -> usize {
-    let Ok(entries) = fs::read_dir(equip_dir) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|n| n.parse::<u32>().is_ok())
-                .unwrap_or(false)
-        })
-        .count()
+fn equip_main_property(equip: &EquipItemSave) -> (u32, u32, u32) {
+    equip.properties.first().map(|p| (p.key, p.base_value, p.add_value)).unwrap_or((0, 0, 0))
+}
+
+fn equip_sub_properties(equip: &EquipItemSave) -> Vec<(u32, u32, u32)> {
+    equip.properties.iter().skip(1).take(4).map(|p| (p.key, p.base_value, p.add_value)).collect()
+}
+
+fn next_equip_uid(save: &PlayerSave) -> u32 {
+    save.equip.iter().map(|e| e.uid).max().unwrap_or(0) + 1
 }
 
 fn render_error_page(error_label: &str, message: &str, locale: Locale) -> String {
@@ -122,26 +114,25 @@ pub(crate) async fn equip_edit(
     Path(equip_uid): Path<u32>,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
+    let Some((_session_id, _session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state_with_active_server(&state, &headers);
-    let uid = resolve_player_uid(&state, session.uid);
-    let equip_path = state
-        .state_dir
-        .join(format!("player/{uid}/equip/{equip_uid}"));
-
+    let state = state.clone();
+    let uid = resolve_player_uid(&state, _session.uid);
     let locale = locale_from_headers(&headers);
 
-    let Some(equip_zon) = read_zon(&equip_path) else {
+    let Some(save) = load_player_save(&state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
-    let level = zon_get_number(&equip_zon, "level").unwrap_or(0) as u32;
-    let locked = zon_get_bool(&equip_zon, "lock").unwrap_or(false);
-    let lock_checked = if locked { "checked" } else { "" };
-    let equip_item_id = zon_get_number(&equip_zon, "id").unwrap_or(0) as u32;
+    let Some(equip) = save.equip.iter().find(|e| e.uid == equip_uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
+    };
+
+    let level = equip.level;
+    let star = equip.star;
+    let equip_item_id = equip.id;
     let hakushin = load_hakushin_data(&state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
     let set_id = equip_set_id(equip_item_id, equip_index);
@@ -157,8 +148,8 @@ pub(crate) async fn equip_edit(
         .and_then(|entry| entry.image_local.as_deref())
         .map(to_asset_url)
         .unwrap_or_else(|| svg_data_uri(&equip_name));
-    let (main_key, _, _) = zon_get_main_property(&equip_zon);
-    let sub_props = zon_get_sub_properties_list(&equip_zon);
+    let (main_key, _, _) = equip_main_property(equip);
+    let sub_props = equip_sub_properties(equip);
     let main_options = disk_main_stat_options(num_slot);
     let normalized_main_key = normalize_disk_main_stat(num_slot, main_key)
         .unwrap_or_else(|| main_options.first().copied().unwrap_or(0));
@@ -183,7 +174,6 @@ pub(crate) async fn equip_edit(
     let sub_options_by_main_json = serde_json::to_string(&sub_options_by_main).unwrap_or_default();
     let label_map_json = serde_json::to_string(&label_map).unwrap_or_default();
     let script = render_equip_substat_script("{}", &sub_options_by_main_json, &label_map_json);
-    let warning = "";
 
     let body = format!(
         r#"<!doctype html>
@@ -206,7 +196,8 @@ pub(crate) async fn equip_edit(
     <form method="post">
       <label>{level_label}</label>
       <input name="level" type="number" min="0" value="{level}" />
-      <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" name="lock" value="1" {lock_checked} style="width:auto;" /> {lock_toggle}</label>
+      <label>{star_label}</label>
+      <input name="star" type="number" min="0" max="5" value="{star}" />
 
             <h3>{main_stat_heading}</h3>
             <div class="row">
@@ -223,7 +214,6 @@ pub(crate) async fn equip_edit(
                 {sub_stat_rows}
             </div>
         {script}
-      {warning}
 
       <div class="form-actions">
         <a href="/dashboard?tab=discs" class="back">{back_label}</a>
@@ -239,7 +229,7 @@ pub(crate) async fn equip_edit(
         equip_img = html_escape_attr(&equip_img),
         slot_num = num_slot,
         level = level,
-        lock_checked = lock_checked,
+        star = star,
         main_options =
             render_stat_select_options(&state, &main_options, normalized_main_key, locale),
         sub_stat_rows = render_sub_stat_rows(
@@ -250,13 +240,12 @@ pub(crate) async fn equip_edit(
             locale
         ),
         script = script,
-        warning = warning,
         edit_title = t(locale, "disc.edit"),
         uid_label = t(locale, "disc.uid"),
         item_label = t(locale, "disc.item"),
         slot_label = t(locale, "disc.slot"),
         level_label = t(locale, "disc.level"),
-        lock_toggle = t(locale, "disc.lock_toggle"),
+        star_label = t(locale, "disc.star"),
         main_stat_heading = t(locale, "disc.main_stat"),
         stat_label_str = t(locale, "disc.stat"),
         sub_stats_heading = t(locale, "disc.sub_stats"),
@@ -276,35 +265,30 @@ pub(crate) async fn equip_update(
     original_uri: OriginalUri,
     Form(payload): Form<EquipUpdateForm>,
 ) -> impl IntoResponse {
-    let Some((session_id, mut session)) = get_session_mut(&headers) else {
+    let Some((_session_id, _session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state_with_active_server(&state, &headers);
-    let uid = resolve_player_uid(&state, session.uid);
-    let equip_path = state
-        .state_dir
-        .join(format!("player/{uid}/equip/{equip_uid}"));
-
+    let state = state.clone();
+    let uid = resolve_player_uid(&state, _session.uid);
     let locale = locale_from_headers(&headers);
 
-    let Some(mut equip_zon) = read_zon(&equip_path) else {
+    let Some(mut save) = load_player_save(&state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
-    if zon_get_number(&equip_zon, "star").is_none() {
-        zon_set_number(&mut equip_zon, "star", 1);
-    }
-    zon_set_number(&mut equip_zon, "level", payload.level as i64);
-    let locked = payload.lock.unwrap_or(0) == 1;
-    zon_set_bool(&mut equip_zon, "lock", locked);
-    let equip_item_id = zon_get_number(&equip_zon, "id").unwrap_or(0) as u32;
+    let Some(equip) = save.equip.iter_mut().find(|e| e.uid == equip_uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
+    };
+
+    equip.level = payload.level;
+    equip.star = payload.star;
+
     let equip_index = load_equip_template_index(&state.asset_dir);
-    let slot = equip_slot(equip_item_id, equip_index);
+    let slot = equip_slot(equip.id, equip_index);
     let main_key = normalize_disk_main_stat(slot, payload.main_key)
         .unwrap_or_else(|| disk_main_stat_options(slot).first().copied().unwrap_or(0));
     let main_base = disk_main_base_value(main_key).unwrap_or(0);
-    zon_set_main_property(&mut equip_zon, main_key, main_base, 0);
 
     let (keys, base, add) = validate_sub_stats(
         main_key,
@@ -312,11 +296,15 @@ pub(crate) async fn equip_update(
         &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
     );
 
-    zon_set_sub_properties(&mut equip_zon, &keys, &base, &add);
+    let mut properties = vec![
+        EquipProperty { key: main_key, base_value: main_base, add_value: 0 },
+    ];
+    for i in 0..keys.len() {
+        properties.push(EquipProperty { key: keys[i], base_value: base[i], add_value: add[i] });
+    }
+    equip.properties = properties;
 
-    let serialized = zon_serialize(&equip_zon);
-    session.pending_writes.insert(equip_path, serialized);
-    set_session(session_id, session);
+    save_player_save(&state, uid, &save);
 
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -330,7 +318,7 @@ pub(crate) async fn equip_new(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let locale = locale_from_headers(&headers);
 
     let options = render_disc_select_options(&state, 0, locale);
@@ -477,19 +465,19 @@ pub(crate) async fn equip_add(
     original_uri: OriginalUri,
     Form(payload): Form<AddEquipForm>,
 ) -> impl IntoResponse {
-    let Some((session_id, session)) = get_session_mut(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let locale = locale_from_headers(&headers);
     let uid = resolve_player_uid(&state, session.uid);
-    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
-    if count_equip_files(&equip_dir) >= MAX_DISCS {
+
+    let mut save = load_player_save(&state, uid).unwrap_or_default();
+    if save.equip.len() >= MAX_DISCS {
         return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
     }
-    let next_uid = read_next_uid(&equip_dir).unwrap_or(1);
-    let new_uid = next_uid.max(1);
+    let new_uid = next_equip_uid(&save).max(1);
     let equip_index = load_equip_template_index(&state.asset_dir);
     let Some(item_id) =
         resolve_equip_item_id(payload.equip_set_id, payload.equip_slot, equip_index)
@@ -510,15 +498,6 @@ pub(crate) async fn equip_add(
                 .unwrap_or(0)
         });
     let main_base = disk_main_base_value(main_key).unwrap_or(0);
-    let main_properties = if main_key == 0 {
-        Vec::new()
-    } else {
-        vec![ZValue::Object(vec![
-            ("add_value".to_string(), ZValue::Number(0)),
-            ("base_value".to_string(), ZValue::Number(main_base as i64)),
-            ("key".to_string(), ZValue::Number(main_key as i64)),
-        ])]
-    };
 
     let (keys, base, add) = validate_sub_stats(
         main_key,
@@ -526,43 +505,25 @@ pub(crate) async fn equip_add(
         &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
     );
 
-    let equip = ZValue::Object(vec![
-        ("id".to_string(), ZValue::Number(item_id as i64)),
-        ("level".to_string(), ZValue::Number(15)),
-        ("exp".to_string(), ZValue::Number(0)),
-        ("lock".to_string(), ZValue::Bool(false)),
-        ("star".to_string(), ZValue::Number(1)),
-        ("properties".to_string(), ZValue::Array(main_properties)),
-        ("sub_properties".to_string(), ZValue::Array(Vec::new())),
-    ]);
-
-    let mut equip = equip;
-    zon_set_sub_properties(&mut equip, &keys, &base, &add);
-
-    let equip_path = equip_dir.join(new_uid.to_string());
-    let serialized = format_zon_pretty(&zon_serialize(&equip));
-    if let Some(parent) = equip_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Err(err) = fs::write(&equip_path, serialized) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("{}: {}", t(locale, "disc.failed_create"), err)),
-        )
-            .into_response();
+    let mut properties = vec![
+        EquipProperty { key: main_key, base_value: main_base, add_value: 0 },
+    ];
+    for i in 0..keys.len() {
+        properties.push(EquipProperty { key: keys[i], base_value: base[i], add_value: add[i] });
     }
 
-    let next_path = equip_dir.join("next");
-    if let Err(err) = fs::write(&next_path, format!("{}\n", new_uid + 1)) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("{}: {}", t(locale, "disc.failed_counter"), err)),
-        )
-            .into_response();
-    }
+    let equip = EquipItemSave {
+        uid: new_uid,
+        id: item_id,
+        level: 15,
+        star: 1,
+        properties,
+    };
+
+    save.equip.push(equip);
+    save_player_save(&state, uid, &save);
 
     audit_log(&state.root_dir, &session.username, session.uid, "equip_add", &format!("created disc {}", new_uid));
-    set_session(session_id, session);
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -575,7 +536,7 @@ pub(crate) async fn equip_generate(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let locale = locale_from_headers(&headers);
 
     let options = render_disc_select_options(&state, 0, locale);
@@ -672,7 +633,7 @@ pub(crate) async fn equip_generate_submit(
     original_uri: OriginalUri,
     Form(payload): Form<GenerateEquipForm>,
 ) -> impl IntoResponse {
-    let Some((session_id, session)) = get_session_mut(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
@@ -686,10 +647,11 @@ pub(crate) async fn equip_generate_submit(
         return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.slot_range"))).into_response();
     }
 
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
-    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
-    let current_count = count_equip_files(&equip_dir);
+
+    let mut save = load_player_save(&state, uid).unwrap_or_default();
+    let current_count = save.equip.len();
     if current_count >= MAX_DISCS {
         return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
     }
@@ -698,7 +660,7 @@ pub(crate) async fn equip_generate_submit(
     if count_to_gen == 0 {
         return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
     }
-    let mut next_uid = read_next_uid(&equip_dir).unwrap_or(1).max(1);
+    let mut next_uid = next_equip_uid(&save).max(1);
     let mut rng = rand::thread_rng();
 
     for _ in 0..count_to_gen {
@@ -708,38 +670,19 @@ pub(crate) async fn equip_generate_submit(
             equip_index,
             &mut rng,
             locale,
+            next_uid,
         ) {
             Ok(value) => value,
             Err(message) => return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.failed_create_gen"), &message, locale))).into_response(),
         };
 
-        let equip_path = equip_dir.join(next_uid.to_string());
-        let serialized = format_zon_pretty(&zon_serialize(&equip));
-        if let Some(parent) = equip_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Err(err) = fs::write(&equip_path, serialized) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(format!("{}: {}", t(locale, "disc.failed_create_gen"), err)),
-            )
-                .into_response();
-        }
-
+        save.equip.push(equip);
         next_uid += 1;
     }
 
-    let next_path = equip_dir.join("next");
-    if let Err(err) = fs::write(&next_path, format!("{}\n", next_uid)) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(format!("{}: {}", t(locale, "disc.failed_counter"), err)),
-        )
-            .into_response();
-    }
+    save_player_save(&state, uid, &save);
 
     audit_log(&state.root_dir, &session.username, session.uid, "equip_generate", &format!("generated {} discs", count_to_gen));
-    set_session(session_id, session);
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -749,50 +692,28 @@ pub(crate) async fn equip_delete_submit(
     original_uri: OriginalUri,
     RawForm(raw_form): RawForm,
 ) -> impl IntoResponse {
-    let Some((session_id, mut session)) = get_session_mut(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
-    let selected = parse_selected_equip_uids(&raw_form_text);
+    let selected: HashSet<u32> = parse_selected_equip_uids(&raw_form_text)
+        .into_iter()
+        .collect();
 
-    let mut deleted = Vec::new();
+    let Some(mut save) = load_player_save(&state, uid) else {
+        return Redirect::to("/dashboard?tab=discs").into_response();
+    };
 
-    for equip_uid in selected {
-        let primary_path = state
-            .state_dir
-            .join(format!("player/{uid}/equip/{equip_uid}"));
+    let before = save.equip.len();
+    save.equip.retain(|e| !selected.contains(&e.uid));
+    let deleted = before - save.equip.len();
 
-        let equip = read_zon(&primary_path);
-        let locked = equip
-            .as_ref()
-            .and_then(|v| zon_get_bool(v, "lock"))
-            .unwrap_or(false);
-        if locked {
-            continue;
-        }
+    save_player_save(&state, uid, &save);
 
-        deleted.push(equip_uid);
-
-        let zon_path = state
-            .state_dir
-            .join(format!("player/{uid}/equip/{equip_uid}.zon"));
-
-        if primary_path.exists() {
-            let _ = fs::remove_file(&primary_path);
-        }
-        if zon_path.exists() {
-            let _ = fs::remove_file(&zon_path);
-        }
-
-        session.pending_writes.remove(&primary_path);
-        session.pending_writes.remove(&zon_path);
-    }
-
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete", &format!("deleted {} discs", deleted.len()));
-    set_session(session_id, session);
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete", &format!("deleted {} discs", deleted));
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -801,41 +722,20 @@ pub(crate) async fn equip_delete_all_unlocked(
     headers: HeaderMap,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((session_id, mut session)) = get_session_mut(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state_with_active_server(&state, &headers);
+    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
-    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
 
-    let mut deleted = 0u32;
+    let mut save = load_player_save(&state, uid).unwrap_or_default();
+    let deleted = save.equip.len();
+    save.equip.clear();
 
-    if let Ok(entries) = fs::read_dir(&equip_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let equip = read_zon(&path);
-            let locked = equip
-                .as_ref()
-                .and_then(|v| zon_get_bool(v, "lock"))
-                .unwrap_or(false);
-            if !locked {
-                if path.exists() {
-                    let _ = fs::remove_file(&path);
-                }
-                let zon_path = path.with_extension("zon");
-                if zon_path.exists() {
-                    let _ = fs::remove_file(&zon_path);
-                }
-                session.pending_writes.remove(&path);
-                session.pending_writes.remove(&zon_path);
-                deleted += 1;
-            }
-        }
-    }
+    save_player_save(&state, uid, &save);
 
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete_all_unlocked", &format!("deleted {} unlocked discs", deleted));
-    set_session(session_id, session);
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete_all_unlocked", &format!("deleted {} discs", deleted));
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -843,53 +743,12 @@ pub(crate) async fn equip_lock_selected(
     State(state): State<AppState>,
     headers: HeaderMap,
     original_uri: OriginalUri,
-    RawForm(raw_form): RawForm,
+    _raw_form: RawForm,
 ) -> impl IntoResponse {
-    equip_set_lock(state, headers, original_uri, &raw_form)
-}
-
-fn equip_set_lock(
-    state: AppState,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
-    raw_form: &[u8],
-) -> Response {
-    let Some((_session_id, session)) = get_session(&headers) else {
+    let Some((_session_id, _session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
-
-    let state = state_with_active_server(&state, &headers);
-    let uid = resolve_player_uid(&state, session.uid);
-    let raw_form_text = String::from_utf8_lossy(raw_form).into_owned();
-    let selected: std::collections::HashSet<u32> = parse_selected_equip_uids(&raw_form_text)
-        .into_iter()
-        .collect();
-    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
-
-    if let Ok(entries) = fs::read_dir(&equip_dir) {
-        for entry in entries.flatten() {
-            let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
-                continue;
-            };
-            let equip_uid = match file_name
-                .strip_suffix(".zon")
-                .unwrap_or(&file_name)
-                .parse::<u32>()
-            {
-                Ok(value) if value > 0 => value,
-                _ => continue,
-            };
-
-            let should_lock = selected.contains(&equip_uid);
-
-            if let Some(mut equip) = read_zon(&entry.path()) {
-                zon_set_bool(&mut equip, "lock", should_lock);
-                let content = format_zon_pretty(&zon_serialize(&equip));
-                let _ = fs::write(&entry.path(), content);
-            }
-        }
-    }
-
+    let _ = &state;
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -916,7 +775,8 @@ fn generate_random_disc(
     equip_index: &EquipTemplateIndex,
     rng: &mut impl Rng,
     locale: Locale,
-) -> Result<ZValue, String> {
+    uid: u32,
+) -> Result<EquipItemSave, String> {
     let mut slots = Vec::new();
     for slot in 1..=6 {
         if resolve_equip_item_id(set_id, slot, equip_index).is_some() {
@@ -978,40 +838,34 @@ fn generate_random_disc(
         add[idx] += 1;
     }
 
-    let mut equip = ZValue::Object(vec![
-        ("id".to_string(), ZValue::Number(item_id as i64)),
-        ("level".to_string(), ZValue::Number(15)),
-        ("exp".to_string(), ZValue::Number(0)),
-        ("lock".to_string(), ZValue::Bool(false)),
-        ("star".to_string(), ZValue::Number(1)),
-        (
-            "properties".to_string(),
-            ZValue::Array(vec![ZValue::Object(vec![
-                ("add_value".to_string(), ZValue::Number(0)),
-                ("base_value".to_string(), ZValue::Number(main_base as i64)),
-                ("key".to_string(), ZValue::Number(main_key as i64)),
-            ])]),
-        ),
-        ("sub_properties".to_string(), ZValue::Array(Vec::new())),
-    ]);
+    let mut properties = vec![
+        EquipProperty { key: main_key, base_value: main_base, add_value: 0 },
+    ];
+    for i in 0..keys.len() {
+        properties.push(EquipProperty { key: keys[i], base_value: base[i], add_value: add[i] });
+    }
 
-    zon_set_sub_properties(&mut equip, &keys, &base, &add);
-    Ok(equip)
+    Ok(EquipItemSave {
+        uid,
+        id: item_id,
+        level: 15,
+        star: 1,
+        properties,
+    })
 }
 
 pub(crate) fn render_equip_cards(
     state: &AppState,
     uid: u32,
     delete_mode: bool,
-    lock_mode: bool,
+    _lock_mode: bool,
     locale: Locale,
     filter_set_id: Option<u32>,
     filter_slot: Option<u32>,
     filter_main_stat: Option<u32>,
-    filter_status: Option<&str>,
+    _filter_status: Option<&str>,
     page: u32,
 ) -> String {
-    let equip_dir = state.state_dir.join(format!("player/{uid}/equip"));
     let equip_templates = load_equip_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
@@ -1025,138 +879,72 @@ pub(crate) fn render_equip_cards(
     let none_str = t(locale, "disc.none");
     let fallback_disc = t(locale, "fallback.disc");
 
+    let save = load_player_save(state, uid);
+
     let mut cards_data = Vec::new();
-    if let Ok(entries) = fs::read_dir(&equip_dir) {
-        for entry in entries.flatten() {
-            let Some(file_name) = entry.file_name().to_str().map(|s| s.to_string()) else {
-                continue;
-            };
-            let equip_uid = match file_name
-                .strip_suffix(".zon")
-                .unwrap_or(&file_name)
-                .parse::<u32>()
-            {
-                Ok(value) if value > 0 => value,
-                _ => continue,
-            };
-            let equip = read_zon(&entry.path());
-            let equip_item_id = equip
-                .as_ref()
-                .and_then(|v| zon_get_number(v, "id"))
-                .unwrap_or(0) as u32;
-            let set_id = equip_set_id(equip_item_id, equip_index);
-            let level = equip
-                .as_ref()
-                .and_then(|v| zon_get_number(v, "level"))
-                .unwrap_or(0);
+    for equip in save.iter().flat_map(|s| s.equip.iter()) {
+        let equip_item_id = equip.id;
+        let set_id = equip_set_id(equip_item_id, equip_index);
+        let level = equip.level;
 
-            let name = hakushin
-                .discs
-                .get(&set_id)
-                .map(|entry| entry.name.clone())
-                .or_else(|| equip_templates.get(&equip_item_id).cloned())
-                .unwrap_or_else(|| format!("{fallback_disc} {equip_item_id}"));
+        let name = hakushin
+            .discs
+            .get(&set_id)
+            .map(|entry| entry.name.clone())
+            .or_else(|| equip_templates.get(&equip_item_id).cloned())
+            .unwrap_or_else(|| format!("{fallback_disc} {equip_item_id}"));
 
-            let main_stat = equip
-                .as_ref()
-                .map(zon_get_main_property)
-                .unwrap_or((0, 0, 0));
-            let slot = equip_slot(equip_item_id, equip_index);
+        let main_stat = equip_main_property(equip);
+        let slot = equip_slot(equip_item_id, equip_index);
 
-            let img = hakushin
-                .discs
-                .get(&set_id)
-                .and_then(|entry| entry.image_local.as_deref())
-                .map(to_asset_url)
-                .unwrap_or_else(|| svg_data_uri(&name));
-            let main_label = stat_label(state, locale, main_stat.0);
-            let sub_stats = equip
-                .as_ref()
-                .map(zon_get_sub_properties_list)
-                .unwrap_or_default();
-            let locked = equip
-                .as_ref()
-                .and_then(|v| zon_get_bool(v, "lock"))
-                .unwrap_or(false);
-            let lock_icon = if locked { " \u{1f512}" } else { "" };
+        let img = hakushin
+            .discs
+            .get(&set_id)
+            .and_then(|entry| entry.image_local.as_deref())
+            .map(to_asset_url)
+            .unwrap_or_else(|| svg_data_uri(&name));
+        let main_label = stat_label(state, locale, main_stat.0);
+        let sub_stats = equip_sub_properties(equip);
 
-            let sub_stats_text = if sub_stats.is_empty() {
-                none_str.to_string()
-            } else {
-                sub_stats
-                    .iter()
-                    .map(|(key, _, procs)| {
-                        format!("{} x{}", stat_label(state, locale, *key), procs)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            let card_html = if delete_mode {
-                if locked {
-                    format!(
-                        "<label class=\"card select-card locked\"><input type=\"checkbox\" disabled /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
-                        uid = equip_uid,
-                        name = html_escape_attr(&name),
-                        level = level,
-                        slot = slot,
-                        main_label = main_label,
-                        sub_stats_text = sub_stats_text,
-                        img = html_escape_attr(&img)
-                    )
-                } else {
-                    format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
-                        uid = equip_uid,
-                        name = html_escape_attr(&name),
-                        level = level,
-                        slot = slot,
-                        main_label = main_label,
-                        sub_stats_text = sub_stats_text,
-                        img = html_escape_attr(&img)
-                    )
-                }
-            } else if lock_mode {
-                if locked {
-                    format!(
-                        "<label class=\"card select-card locked\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" checked /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid} \u{1f512}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
-                        uid = equip_uid,
-                        name = html_escape_attr(&name),
-                        level = level,
-                        slot = slot,
-                        main_label = main_label,
-                        sub_stats_text = sub_stats_text,
-                        img = html_escape_attr(&img)
-                    )
-                } else {
-                    format!(
-                        "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
-                        uid = equip_uid,
-                        name = html_escape_attr(&name),
-                        level = level,
-                        slot = slot,
-                        main_label = main_label,
-                        sub_stats_text = sub_stats_text,
-                        img = html_escape_attr(&img)
-                    )
-                }
-            } else {
-                format!(
-                    "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}{lock_icon}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></a>",
-                    uid = equip_uid,
-                    name = html_escape_attr(&name),
-                    level = level,
-                    slot = slot,
-                    main_label = main_label,
-                    sub_stats_text = sub_stats_text,
-                    img = html_escape_attr(&img),
-                    lock_icon = lock_icon
-                )
-            };
-            cards_data.push((equip_item_id, equip_uid, card_html, set_id, slot, main_stat.0, locked));
-        }
+        let sub_stats_text = if sub_stats.is_empty() {
+            none_str.to_string()
+        } else {
+            sub_stats
+                .iter()
+                .map(|(key, _, procs)| {
+                    format!("{} x{}", stat_label(state, locale, *key), procs)
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let card_html = if delete_mode {
+            format!(
+                "<label class=\"card select-card\"><input type=\"checkbox\" name=\"equip_uids[]\" value=\"{uid}\" /><span class=\"selection-outline\"></span><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></label>",
+                uid = equip.uid,
+                name = html_escape_attr(&name),
+                level = level,
+                slot = slot,
+                main_label = main_label,
+                sub_stats_text = sub_stats_text,
+                img = html_escape_attr(&img)
+            )
+        } else {
+            format!(
+                "<a class=\"card\" href=\"/equip/{uid}\"><img class=\"thumb\" src=\"{img}\" alt=\"{name}\" /><span class=\"pill\">{uid_label} {uid}</span><h3>{name}</h3><div class=\"meta\">{set_label}: {name}</div><div class=\"meta\">{slot_label}: {slot}</div><div class=\"meta\">{level_label}: {level}</div><div class=\"meta\">{main_stat_label}: {main_label}</div><div class=\"meta\">{sub_stats_lbl}: {sub_stats_text}</div></a>",
+                uid = equip.uid,
+                name = html_escape_attr(&name),
+                level = level,
+                slot = slot,
+                main_label = main_label,
+                sub_stats_text = sub_stats_text,
+                img = html_escape_attr(&img)
+            )
+        };
+        cards_data.push((equip_item_id, equip.uid, card_html, set_id, slot, main_stat.0));
     }
 
-    cards_data.retain(|(_, _, _, set_id, slot, main_stat_key, locked)| {
+    cards_data.retain(|(_, _, _, set_id, slot, main_stat_key)| {
         if let Some(fid) = filter_set_id {
             if *set_id != fid {
                 return false;
@@ -1172,15 +960,10 @@ pub(crate) fn render_equip_cards(
                 return false;
             }
         }
-        match filter_status {
-            Some("locked") if !locked => return false,
-            Some("unlocked") if *locked => return false,
-            _ => {}
-        }
         true
     });
 
-    cards_data.sort_by_key(|(equip_item_id, equip_uid, _, _, _, _, _)| (*equip_item_id, *equip_uid));
+    cards_data.sort_by_key(|(equip_item_id, equip_uid, _, _, _, _)| (*equip_item_id, *equip_uid));
     let total = cards_data.len();
 
     let per_page: usize = 50;
@@ -1191,12 +974,12 @@ pub(crate) fn render_equip_cards(
     let page_cards: Vec<_> = cards_data.drain(start..end).collect();
 
     let mut cards = String::new();
-    for (_, _, card_html, _, _, _, _) in page_cards {
+    for (_, _, card_html, _, _, _) in page_cards {
         cards.push_str(&card_html);
     }
 
-    let filter_panel = render_disc_filter_panel(state, locale, filter_set_id, filter_slot, filter_main_stat, filter_status, delete_mode, lock_mode);
-    let pagination_html = if total_pages > 1 { render_pagination(locale, page, total_pages as u32, filter_set_id, filter_slot, filter_main_stat, filter_status, total, delete_mode, lock_mode) } else { String::new() };
+    let filter_panel = render_disc_filter_panel(state, locale, filter_set_id, filter_slot, filter_main_stat, _filter_status, delete_mode);
+    let pagination_html = if total_pages > 1 { render_pagination(locale, page, total_pages as u32, filter_set_id, filter_slot, filter_main_stat, _filter_status, total, delete_mode) } else { String::new() };
 
     if cards.is_empty() && total == 0 {
         cards.push_str(&format!(
@@ -1205,7 +988,7 @@ pub(crate) fn render_equip_cards(
         ));
     }
 
-    let add_panel = render_add_equip_panel(state, delete_mode, lock_mode, locale);
+    let add_panel = render_add_equip_panel(state, delete_mode, locale);
     if delete_mode {
         let delete_panel = format!(
             "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">{}</button><button class=\"danger\" type=\"submit\" formaction=\"/equip/delete-all-unlocked\" onclick=\"return confirm('{}');\">{}</button><a href=\"/dashboard?tab=discs\">{}</a></div></div>",
@@ -1220,17 +1003,6 @@ pub(crate) fn render_equip_cards(
             t(locale, "disc.delete_selected"),
             pagination_html = pagination_html,
         )
-    } else if lock_mode {
-        let lock_panel = format!(
-            "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button type=\"submit\" formaction=\"/equip/lock-selected\">{}</button><a href=\"/dashboard?tab=discs\">{}</a></div></div>",
-            t(locale, "disc.lock_mode"),
-            t(locale, "disc.lock_selected"),
-            t(locale, "disc.cancel"),
-        );
-        format!(
-            "{add_panel}<form class=\"lock-form\" method=\"post\">{lock_panel}{filter_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
-            pagination_html = pagination_html,
-        )
     } else {
         format!("{add_panel}{filter_panel}<div class=\"cards\">{cards}</div>{pagination_html}")
     }
@@ -1239,29 +1011,21 @@ pub(crate) fn render_equip_cards(
 fn render_add_equip_panel(
     state: &AppState,
     delete_mode: bool,
-    lock_mode: bool,
     locale: Locale,
 ) -> String {
     let _ = state;
     let title = t(locale, "disc.title");
-    let add = t(locale, "disc.add");
     let new_disc = t(locale, "disc.new_disc");
     let generate_discs = t(locale, "disc.generate_discs");
     let delete_discs = t(locale, "disc.delete_discs");
-    let lock_discs = t(locale, "disc.lock_discs");
     let exit_delete = t(locale, "disc.exit_delete");
-    let exit_lock = t(locale, "disc.exit_lock");
     if delete_mode {
         format!(
             "<div class=\"panel\"><h3>{title}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">{new_disc}</a><a href=\"/equip/generate\">{generate_discs}</a><a href=\"/dashboard?tab=discs\">{exit_delete}</a></div></div>"
         )
-    } else if lock_mode {
-        format!(
-            "<div class=\"panel\"><h3>{title}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">{new_disc}</a><a href=\"/equip/generate\">{generate_discs}</a><a href=\"/dashboard?tab=discs\">{exit_lock}</a></div></div>"
-        )
     } else {
         format!(
-            "<div class=\"panel\"><h3>{add}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">{new_disc}</a><a href=\"/equip/generate\">{generate_discs}</a><a href=\"/dashboard?tab=discs&delete=1\">{delete_discs}</a><a href=\"/dashboard?tab=discs&lock=1\">{lock_discs}</a></div></div>"
+            "<div class=\"panel\"><h3>{title}</h3><div style=\"display:flex; gap:8px;\"><a href=\"/equip/new\">{new_disc}</a><a href=\"/equip/generate\">{generate_discs}</a><a href=\"/dashboard?tab=discs&delete=1\">{delete_discs}</a></div></div>"
         )
     }
 }
@@ -1292,7 +1056,7 @@ fn render_generate_slot_options(selected: Option<u32>, locale: Locale) -> String
 fn render_disc_select_options(state: &AppState, selected_id: u32, locale: Locale) -> String {
     let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
-    let known_sets: std::collections::HashSet<u32> = equip_index
+    let known_sets: HashSet<u32> = equip_index
         .by_suit_slot
         .keys()
         .map(|(set_id, _)| *set_id)
@@ -1327,14 +1091,13 @@ fn render_disc_filter_panel(
     filter_set_id: Option<u32>,
     filter_slot: Option<u32>,
     filter_main_stat: Option<u32>,
-    filter_status: Option<&str>,
+    _filter_status: Option<&str>,
     delete_mode: bool,
-    lock_mode: bool,
 ) -> String {
     let set_opts = {
         let hakushin = load_hakushin_data(state, locale);
         let equip_index = load_equip_template_index(&state.asset_dir);
-        let known_sets: std::collections::HashSet<u32> = equip_index
+        let known_sets: HashSet<u32> = equip_index
             .by_suit_slot
             .keys()
             .map(|(set_id, _)| *set_id)
@@ -1374,78 +1137,44 @@ fn render_disc_filter_panel(
         html
     };
 
-    let status_opts = {
-        let all_sel = if filter_status.is_none() || filter_status == Some("") { " selected" } else { "" };
-        let locked_sel = if filter_status == Some("locked") { " selected" } else { "" };
-        let unlocked_sel = if filter_status == Some("unlocked") { " selected" } else { "" };
-        format!(
-            "<option value=\"\"{}>{}</option><option value=\"locked\"{}>{}</option><option value=\"unlocked\"{}>{}</option>",
-            all_sel, t(locale, "disc.filter_all"),
-            locked_sel, t(locale, "disc.filter_locked"),
-            unlocked_sel, t(locale, "disc.filter_unlocked"),
-        )
-    };
-
-    let mode_hidden = if delete_mode {
-        "delete=1"
-    } else if lock_mode {
-        "lock=1"
+    let _mode_query = if delete_mode {
+        "&delete=1".to_string()
     } else {
-        ""
-    };
-    let mode_query = if mode_hidden.is_empty() {
         String::new()
-    } else {
-        format!("&{mode_hidden}")
     };
 
-    if delete_mode || lock_mode {
+    if delete_mode {
         let current_set_id = filter_set_id.map(|v| v.to_string()).unwrap_or_default();
         let current_slot = filter_slot.map(|v| v.to_string()).unwrap_or_default();
         let current_main_stat = filter_main_stat.map(|v| v.to_string()).unwrap_or_default();
-        let current_status = filter_status.unwrap_or("").to_string();
         format!(
             r#"<div style="margin-bottom:12px;">
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <span style="font-size:11px; color:#9aa4b2;">{set_label}</span>
-                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id='+this.value+'&slot={current_slot}&main_stat={current_main_stat}&status={current_status}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{set_opts}</select>
+                    <select onchange="window.location='/dashboard?tab=discs&delete=1&set_id='+this.value+'&slot={current_slot}&main_stat={current_main_stat}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{set_opts}</select>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <span style="font-size:11px; color:#9aa4b2;">{slot_label}</span>
-                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id={current_set_id}&slot='+this.value+'&main_stat={current_main_stat}&status={current_status}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{slot_opts}</select>
+                    <select onchange="window.location='/dashboard?tab=discs&delete=1&set_id={current_set_id}&slot='+this.value+'&main_stat={current_main_stat}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{slot_opts}</select>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <span style="font-size:11px; color:#9aa4b2;">{main_stat_label}</span>
-                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id={current_set_id}&slot={current_slot}&main_stat='+this.value+'&status={current_status}'" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{main_stat_opts}</select>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                    <span style="font-size:11px; color:#9aa4b2;">{status_label}</span>
-                    <select onchange="window.location='/dashboard?tab=discs{mode_query}&set_id={current_set_id}&slot={current_slot}&main_stat={current_main_stat}&status='+this.value" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{status_opts}</select>
+                    <select onchange="window.location='/dashboard?tab=discs&delete=1&set_id={current_set_id}&slot={current_slot}&main_stat='+this.value" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{main_stat_opts}</select>
                 </div>
             </div>
         </div>"#,
             set_label = t(locale, "disc.filter_set"),
             slot_label = t(locale, "disc.filter_slot"),
             main_stat_label = t(locale, "disc.filter_main_stat"),
-            status_label = t(locale, "disc.filter_status"),
-            mode_query = mode_query,
             current_set_id = current_set_id,
             current_slot = current_slot,
             current_main_stat = current_main_stat,
-            current_status = current_status,
         )
     } else {
-        let hidden_input = if mode_hidden.is_empty() {
-            String::new()
-        } else {
-            format!("<input type=\"hidden\" name=\"{}\" value=\"1\" />", mode_hidden)
-        };
-
         format!(
             r#"<form method="get" action="/dashboard" style="margin-bottom:12px;">
             <input type="hidden" name="tab" value="discs" />
-            {hidden_input}
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <span style="font-size:11px; color:#9aa4b2;">{set_label}</span>
@@ -1459,17 +1188,11 @@ fn render_disc_filter_panel(
                     <span style="font-size:11px; color:#9aa4b2;">{main_stat_label}</span>
                     <select name="main_stat" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{main_stat_opts}</select>
                 </div>
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                    <span style="font-size:11px; color:#9aa4b2;">{status_label}</span>
-                    <select name="status" onchange="this.form.submit()" style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">{status_opts}</select>
-                </div>
             </div>
         </form>"#,
             set_label = t(locale, "disc.filter_set"),
             slot_label = t(locale, "disc.filter_slot"),
             main_stat_label = t(locale, "disc.filter_main_stat"),
-            status_label = t(locale, "disc.filter_status"),
-            hidden_input = hidden_input,
         )
     }
 }
@@ -1481,10 +1204,9 @@ fn render_pagination(
     filter_set_id: Option<u32>,
     filter_slot: Option<u32>,
     filter_main_stat: Option<u32>,
-    filter_status: Option<&str>,
+    _filter_status: Option<&str>,
     total: usize,
     delete_mode: bool,
-    lock_mode: bool,
 ) -> String {
     let showing_label = t(locale, "disc.showing");
     let page_label = t(locale, "disc.page");
@@ -1499,9 +1221,6 @@ fn render_pagination(
     if delete_mode {
         filter_params.push_str("&delete=1");
     }
-    if lock_mode {
-        filter_params.push_str("&lock=1");
-    }
     if let Some(s) = filter_set_id {
         filter_params.push_str(&format!("&set_id={}", s));
     }
@@ -1511,9 +1230,9 @@ fn render_pagination(
     if let Some(m) = filter_main_stat {
         filter_params.push_str(&format!("&main_stat={}", m));
     }
-    if let Some(st) = filter_status {
-        if !st.is_empty() {
-            filter_params.push_str(&format!("&status={}", st));
+    if let Some(_st) = _filter_status {
+        if !_st.is_empty() {
+            filter_params.push_str(&format!("&status={}", _st));
         }
     }
 

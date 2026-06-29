@@ -60,8 +60,6 @@ pub(crate) async fn apply_changes(
     };
 
     let count = session.pending_writes.len();
-    let mut paths = String::new();
-    let mut wrote = 0;
 
     for (path, content) in session.pending_writes.drain() {
         if let Some(parent) = path.parent() {
@@ -75,11 +73,6 @@ pub(crate) async fn apply_changes(
             )
                 .into_response();
         }
-        if wrote > 0 {
-            paths.push_str(", ");
-        }
-        paths.push_str(&path.display().to_string());
-        wrote += 1;
     }
 
     audit_log(
