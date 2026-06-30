@@ -71,10 +71,10 @@ async fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let state_dir = env::var("GEAR_STATE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("bin_remielle/Persistent/LocalStorage"));
+        .unwrap_or_else(|_| root.join("remielle/Persistent/LocalStorage"));
     let asset_dir = env::var("GEAR_ASSET_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("bin_remielle/assets/filecfg"));
+        .unwrap_or_else(|_| root.join("remielle/assets/filecfg"));
     let dump_dir = env::var("ZZZ_DUMP_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("zzz_dump/latest"));
