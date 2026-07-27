@@ -1,18 +1,17 @@
-use crate::app_state::cookie_value;
+use crate::app_state::{cookie_value, AppState};
 use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
-use password_hash::PasswordHash;
-use pbkdf2::Pbkdf2;
 use rand::{Rng, distributions::Alphanumeric};
-use rusqlite::{Connection, params};
 use std::{
     collections::HashMap,
-    path::{Path as FsPath, PathBuf},
+    path::PathBuf,
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
+
+pub(crate) const ADMIN_LOGIN: &str = "XaPoHbomj";
 
 static SESSION_STORE: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
 
@@ -32,38 +31,54 @@ pub(crate) struct Session {
 }
 
 pub(crate) fn validate_login(
-    db_path: &FsPath,
+    state: &AppState,
     username: &str,
     password: &str,
-) -> Result<Option<Session>, String> {
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT uid, username, password FROM t_sdk_account WHERE username = ?1")
-        .map_err(|e| e.to_string())?;
-
-    let row = stmt.query_row(params![username], |row| {
-        let uid: i32 = row.get(0)?;
-        let username: String = row.get(1)?;
-        let hash: String = row.get(2)?;
-        Ok((uid, username, hash))
-    });
-
-    let (uid, username, hash) = match row {
-        Ok(v) => v,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-        Err(e) => return Err(e.to_string()),
-    };
-
-    let hash = PasswordHash::new(&hash).map_err(|e| e.to_string())?;
-    if hash.verify_password(&[&Pbkdf2], password).is_ok() {
-        Ok(Some(Session {
-            uid,
-            username,
-            pending_writes: HashMap::new(),
-            last_active: Instant::now(),
-        }))
-    } else {
-        Ok(None)
+) -> Result<Option<(Session, bool)>, String> {
+    let passwd_path = state.state_dir.join("../SDK/passwd");
+    let data = std::fs::read(&passwd_path).map_err(|e| format!("read passwd: {e}"))?;
+    if data.len() < 8 {
+        return Err("invalid passwd file".into());
+    }
+    let count = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
+    let expected = 8 + count * (32 + 64 + 257);
+    if data.len() < expected {
+        return Err("truncated passwd file".into());
+    }
+    let mut pos = 8;
+    let mut names = Vec::with_capacity(count);
+    for _ in 0..count {
+        let end = data[pos..].iter().position(|b| *b == 0).unwrap_or(32).min(32);
+        names.push(std::str::from_utf8(&data[pos..pos + end]).unwrap_or("").to_string());
+        pos += 32;
+    }
+    pos += count * 64; // skip tokens
+    let mut found_uid = None;
+    let mut found_idx = None;
+    for i in 0..count {
+        let hash_end = data[pos..].iter().position(|b| *b == 0).unwrap_or(257).min(257);
+        let hash_str = std::str::from_utf8(&data[pos..pos + hash_end]).unwrap_or("");
+        if names[i] == username {
+            if !hash_str.is_empty() && bcrypt::verify(password, hash_str).unwrap_or(false) {
+                found_uid = Some(i as i32 + 1);
+                found_idx = Some(i);
+            }
+            break;
+        }
+        pos += 257;
+    }
+    let is_admin = username == ADMIN_LOGIN;
+    match found_uid {
+        Some(uid) => Ok(Some((
+            Session {
+                uid,
+                username: username.to_string(),
+                pending_writes: HashMap::new(),
+                last_active: Instant::now(),
+            },
+            is_admin,
+        ))),
+        None => Ok(None),
     }
 }
 
@@ -165,5 +180,5 @@ pub(crate) fn remove_session(session_id: &str) {
 }
 
 pub(crate) fn is_admin(session: &Session) -> bool {
-    session.username == "XaPoHbomj" && session.uid == 1
+    session.username == ADMIN_LOGIN
 }

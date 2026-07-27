@@ -19,12 +19,12 @@ pub(crate) fn render_client_updates_panel(
 ) -> String {
     let beta_patch = find_update_file(
         &state.root_dir.join("client_updates/Beta/Patch"),
-        "vortex_patch_beta_",
+        "thaumiel_patch_beta_",
     );
     let beta_updates = list_update_files(&state.root_dir.join("client_updates/Beta/Update"));
     let prod_patch = find_update_file(
         &state.root_dir.join("client_updates/Prod/Patch"),
-        "vortex_patch_prod_",
+        "thaumiel_patch_prod_",
     );
 
     let beta_items = vec![

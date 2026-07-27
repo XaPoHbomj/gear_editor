@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) db_path: PathBuf,
     pub(crate) state_dir: PathBuf,
     pub(crate) asset_dir: PathBuf,
     pub(crate) dump_dir: PathBuf,
     pub(crate) root_dir: PathBuf,
+    pub(crate) ctl_addr: String,
 }
 
 impl AppState {

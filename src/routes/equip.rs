@@ -1,6 +1,7 @@
 use crate::{
     app_state::AppState,
     auth::{get_session, html_escape_attr, redirect_to_login},
+    ctl,
     data::{
         hakushin::{load_hakushin_data, to_asset_url},
         templates::{
@@ -15,7 +16,7 @@ use crate::{
     i18n::{Locale, locale_from_headers, t},
     player_state::{
         load_player_save, parse_slot_value, render_equip_substat_script, render_slot_options,
-        render_stat_select_options, render_sub_stat_rows, resolve_player_uid, save_player_save,
+        render_stat_select_options, render_sub_stat_rows, resolve_player_uid,
     },
     utils::{audit_log, shared_page_css, svg_data_uri},
 };
@@ -25,7 +26,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use rand::{Rng, seq::SliceRandom};
-use crate::remielle_save::{EquipItemSave, EquipProperty, PlayerSave};
+use crate::remielle_save::{EquipItemSave, PlayerSave};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -269,26 +270,14 @@ pub(crate) async fn equip_update(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
     let uid = resolve_player_uid(&state, _session.uid);
-    let locale = locale_from_headers(&headers);
-
-    let Some(mut save) = load_player_save(&state, uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
-    };
-
-    let Some(equip) = save.equip.iter_mut().find(|e| e.uid == equip_uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
-    };
-
-    equip.level = payload.level;
-    equip.star = payload.star;
 
     let equip_index = load_equip_template_index(&state.asset_dir);
-    let slot = equip_slot(equip.id, equip_index);
+    let save = load_player_save(&state, uid);
+
+    let slot = save.as_ref().and_then(|s| s.equip.iter().find(|e| e.uid == equip_uid)).map(|e| equip_slot(e.id, equip_index)).unwrap_or(1);
     let main_key = normalize_disk_main_stat(slot, payload.main_key)
         .unwrap_or_else(|| disk_main_stat_options(slot).first().copied().unwrap_or(0));
-    let main_base = disk_main_base_value(main_key).unwrap_or(0);
 
     let (keys, base, add) = validate_sub_stats(
         main_key,
@@ -296,15 +285,16 @@ pub(crate) async fn equip_update(
         &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
     );
 
-    let mut properties = vec![
-        EquipProperty { key: main_key, base_value: main_base, add_value: 0 },
-    ];
+    let main_base = disk_main_base_value(main_key).unwrap_or(0);
+    let mut properties = [(0u16, 0u16, 0u8); 5];
+    properties[0] = (main_key as u16, main_base as u16, 0);
     for i in 0..keys.len() {
-        properties.push(EquipProperty { key: keys[i], base_value: base[i], add_value: add[i] });
+        properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
     }
-    equip.properties = properties;
 
-    save_player_save(&state, uid, &save);
+    if let Err(e) = ctl::mod_equip(&state.ctl_addr, uid, equip_uid, payload.level as u8, payload.star as u8, &properties) {
+        return Html(format!("ctl error: {e}")).into_response();
+    }
 
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -469,24 +459,14 @@ pub(crate) async fn equip_add(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
     let locale = locale_from_headers(&headers);
     let uid = resolve_player_uid(&state, session.uid);
 
-    let mut save = load_player_save(&state, uid).unwrap_or_default();
-    if save.equip.len() >= MAX_DISCS {
-        return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
-    }
-    let new_uid = next_equip_uid(&save).max(1);
     let equip_index = load_equip_template_index(&state.asset_dir);
     let Some(item_id) =
         resolve_equip_item_id(payload.equip_set_id, payload.equip_slot, equip_index)
     else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Html(t(locale, "disc.invalid_set_slot")),
-        )
-            .into_response();
+        return Html(t(locale, "disc.invalid_set_slot")).into_response();
     };
     let item_id = force_disc_fourth_digit(item_id);
 
@@ -505,25 +485,17 @@ pub(crate) async fn equip_add(
         &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
     );
 
-    let mut properties = vec![
-        EquipProperty { key: main_key, base_value: main_base, add_value: 0 },
-    ];
+    let mut properties = [(0u16, 0u16, 0u8); 5];
+    properties[0] = (main_key as u16, main_base as u16, 0);
     for i in 0..keys.len() {
-        properties.push(EquipProperty { key: keys[i], base_value: base[i], add_value: add[i] });
+        properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
     }
 
-    let equip = EquipItemSave {
-        uid: new_uid,
-        id: item_id,
-        level: 15,
-        star: 1,
-        properties,
-    };
+    if let Err(e) = ctl::create_equip(&state.ctl_addr, uid, item_id as u16, 15, 1, &properties) {
+        return Html(format!("ctl error: {e}")).into_response();
+    }
 
-    save.equip.push(equip);
-    save_player_save(&state, uid, &save);
-
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_add", &format!("created disc {}", new_uid));
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_add", &format!("set={} slot={}", payload.equip_set_id, payload.equip_slot));
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -647,42 +619,32 @@ pub(crate) async fn equip_generate_submit(
         return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.slot_range"))).into_response();
     }
 
-    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
 
-    let mut save = load_player_save(&state, uid).unwrap_or_default();
-    let current_count = save.equip.len();
-    if current_count >= MAX_DISCS {
-        return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
-    }
     let equip_index = load_equip_template_index(&state.asset_dir);
-    let count_to_gen = (payload.count as usize).min(MAX_DISCS - current_count);
-    if count_to_gen == 0 {
-        return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.limit_reached"), t(locale, "disc.limit_reached"), locale))).into_response();
-    }
-    let mut next_uid = next_equip_uid(&save).max(1);
+    let count_to_gen = payload.count as usize;
     let mut rng = rand::thread_rng();
+    let mut ok = 0usize;
 
     for _ in 0..count_to_gen {
-        let equip = match generate_random_disc(
+        let (item_id, properties_tup) = match generate_random_disc(
             payload.equip_set_id,
             selected_slot,
             equip_index,
             &mut rng,
             locale,
-            next_uid,
         ) {
             Ok(value) => value,
             Err(message) => return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.failed_create_gen"), &message, locale))).into_response(),
         };
 
-        save.equip.push(equip);
-        next_uid += 1;
+        if let Err(e) = ctl::create_equip(&state.ctl_addr, uid, item_id as u16, 15, 1, &properties_tup) {
+            return Html(format!("ctl error (generate): {e}")).into_response();
+        }
+        ok += 1;
     }
 
-    save_player_save(&state, uid, &save);
-
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_generate", &format!("generated {} discs", count_to_gen));
+    audit_log(&state.root_dir, &session.username, session.uid, "equip_generate", &format!("generated {} discs", ok));
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -696,22 +658,17 @@ pub(crate) async fn equip_delete_submit(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
-    let selected: HashSet<u32> = parse_selected_equip_uids(&raw_form_text)
-        .into_iter()
-        .collect();
+    let selected: Vec<u32> = parse_selected_equip_uids(&raw_form_text);
 
-    let Some(mut save) = load_player_save(&state, uid) else {
-        return Redirect::to("/dashboard?tab=discs").into_response();
-    };
-
-    let before = save.equip.len();
-    save.equip.retain(|e| !selected.contains(&e.uid));
-    let deleted = before - save.equip.len();
-
-    save_player_save(&state, uid, &save);
+    let addr = &state.ctl_addr;
+    let mut deleted = 0usize;
+    for equip_uid in selected {
+        if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
+            deleted += 1;
+        }
+    }
 
     audit_log(&state.root_dir, &session.username, session.uid, "equip_delete", &format!("deleted {} discs", deleted));
     Redirect::to("/dashboard?tab=discs").into_response()
@@ -726,14 +683,17 @@ pub(crate) async fn equip_delete_all_unlocked(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
+    let save = load_player_save(&state, uid);
+    let uids: Vec<u32> = save.iter().flat_map(|s| s.equip.iter().map(|e| e.uid)).collect();
 
-    let mut save = load_player_save(&state, uid).unwrap_or_default();
-    let deleted = save.equip.len();
-    save.equip.clear();
-
-    save_player_save(&state, uid, &save);
+    let addr = &state.ctl_addr;
+    let mut deleted = 0usize;
+    for equip_uid in uids {
+        if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
+            deleted += 1;
+        }
+    }
 
     audit_log(&state.root_dir, &session.username, session.uid, "equip_delete_all_unlocked", &format!("deleted {} discs", deleted));
     Redirect::to("/dashboard?tab=discs").into_response()
@@ -775,8 +735,7 @@ fn generate_random_disc(
     equip_index: &EquipTemplateIndex,
     rng: &mut impl Rng,
     locale: Locale,
-    uid: u32,
-) -> Result<EquipItemSave, String> {
+) -> Result<(u32, [(u16, u16, u8); 5]), String> {
     let mut slots = Vec::new();
     for slot in 1..=6 {
         if resolve_equip_item_id(set_id, slot, equip_index).is_some() {
@@ -838,20 +797,13 @@ fn generate_random_disc(
         add[idx] += 1;
     }
 
-    let mut properties = vec![
-        EquipProperty { key: main_key, base_value: main_base, add_value: 0 },
-    ];
+    let mut properties = [(0u16, 0u16, 0u8); 5];
+    properties[0] = (main_key as u16, main_base as u16, 0);
     for i in 0..keys.len() {
-        properties.push(EquipProperty { key: keys[i], base_value: base[i], add_value: add[i] });
+        properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
     }
 
-    Ok(EquipItemSave {
-        uid,
-        id: item_id,
-        level: 15,
-        star: 1,
-        properties,
-    })
+    Ok((item_id, properties))
 }
 
 pub(crate) fn render_equip_cards(

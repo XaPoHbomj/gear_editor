@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Web admin panel for the remielle game server. Reads/writes protobuf `PlayerSave` files, reads server config ZON files, and serves game data from `zzz_dump/latest/`.
+Web admin panel for the remielle game server. All mutations (avatar, weapon, equip edits/creates/deletes) are sent to a running server via UDP control protocol (ctl). The old file-writing approach has been replaced by ctl commands.
 
 **Tech stack:** Rust + Axum 0.7, inline `format!()` HTML, vanilla JS.
 
@@ -17,10 +17,11 @@ gear_editor/
 └── src/
     ├── main.rs         # Router, dashboard HTML with inline CSS
     ├── app_state.rs    # AppState, cookie parsing, version from state_dir/version/
-    ├── auth.rs         # Session store, login (pbkdf2 against hoyo-sdk DB)
+    ├── auth.rs         # Session store, login via bcrypt from remielle SDK/passwd
     ├── assets.rs       # Static file serving from zzz_dump/assets/
+    ├── ctl.rs          # UDP control protocol client (modAvatarMeta, createWeapon, modEquip, etc.)
     ├── i18n.rs         # 5-locale translation table (EN, RU, CN, KR, JP)
-    ├── player_state.rs # UID resolution from GENERAL_DATA.bin, PlayerSave load/save
+    ├── player_state.rs # UID resolution from GENERAL_DATA.bin, PlayerSave load
     ├── remielle_save.rs# Manual protobuf parser/serializer (~660 lines)
     ├── updates.rs      # Client updates panel (upload/delete/browse)
     ├── utils.rs        # apply_changes, shared_page_css, svg_data_uri
@@ -30,12 +31,12 @@ gear_editor/
     │   └── templates.rs# Template JSON via zon_parse_entries (ZON format)
     └── routes/
         ├── auth.rs     # Login page
-        ├── avatar.rs   # Character edit/update/cards/add-all (protobuf PlayerSave)
-        ├── weapon.rs   # Weapon edit/new/update/add (protobuf PlayerSave)
-        ├── equip.rs    # Disc edit/new/generate/delete/lock/filter (protobuf PlayerSave)
-        ├── bangboo.rs  # Bangboo edit/update/cards/add-all (protobuf PlayerSave)
+        ├── avatar.rs   # Character edit/update/cards/add-all (ctl modAvatarMeta)
+        ├── weapon.rs   # Weapon edit/new/update (ctl create/mod/deleteWeapon)
+        ├── equip.rs    # Disc edit/new/generate/delete (ctl create/mod/deleteEquip)
+        ├── bangboo.rs  # Bangboo edit/update/cards/add-all (file writes)
         ├── challenges.rs # DA/Shiyu detail pages + status tab
-        └── admin.rs    # Client update upload/delete + hadal zone editing
+        └── admin.rs    # Client update upload/delete + hadal zone editing (ctl modHadalEntrance)
 ```
 
 ---
@@ -44,10 +45,13 @@ gear_editor/
 
 ```
 bin_remielle/Persistent/LocalStorage/
-    GENERAL_DATA.bin          # LE u64 array: index i -> player_uid = 666 + i
-    USD_{uid}.bin             # PlayerSave protobuf (fields 1-8)
+    GENERAL_DATA.bin          # LE u64 array: index i -> player_uid found by file scan or 1+i
+    USD_{uid}.bin             # PlayerSave protobuf (fields 1-6)
+    version/                  # Version marker for dashboard
+bin_remielle/Persistent/SDK/
+    passwd                    # Account DB: count(u64) + names(32B each) + tokens(64B) + bcrypt hashes(257B)
 configs_remielle/server{1,2,3}/
-    config.zon                # Server config with hadal_zone_entrances
+    config.zon                # Server config (game_bind_address, ctl_bind_address — no hadal zones)
 zzz_dump/latest/{en,zh,ko,ja}/
     avatar_details.json       # Character data
     weapon_details.json       # Weapon data
@@ -60,7 +64,7 @@ zzz_dump/latest/{en,zh,ko,ja}/
 
 ---
 
-## Protobuf PlayerSave (Most Important)
+## Protobuf PlayerSave
 
 `remielle_save.rs` implements a manual protobuf parser (no `prost`/`protoc`). PlayerSave fields:
 
@@ -75,32 +79,22 @@ zzz_dump/latest/{en,zh,ko,ja}/
 | 7 | main_city_time |
 | 8 | unknown (optional) |
 
-**No hadal_zone field.** DA/Shiyu state is runtime-only in remielle (not persisted).
+**No hadal_zone field.** DA/Shiyu state is runtime-only in remielle (not persisted). Zone changes go via ctl `modHadalEntrance`.
 
-Key functions in `remielle_save.rs`:
-- `parse_player_save(data: &[u8]) -> PlayerSave`
-- `serialize_player_save(save: &PlayerSave) -> Vec<u8>`
+Functions in `remielle_save.rs` are read-only now — only used for card views. All mutations go through `ctl.rs`.
 
 ---
 
 ## DA/Shiyu Features (Status Tab + Detail Pages)
 
 ### Status tab (`/dashboard?tab=status`)
-- Reads `configs_remielle/server{1,2,3}/config.zon` via `extract_entrance_zone()`
 - Shows 3 card panels per server: Shiyu, Deadly Assault, Deadly Assault Hardcore
-- Cards use labels (not zone names) as titles
-- Admin users see inline zone ID edit forms that call `scripts/update_hadal_zone.sh`
-
-### Detail pages (`/da/:id`, `/shiyu/:id`)
-- Read-only, no selection/writing
-- DA: shows boss cards with HP/BaseHP/ATK/DEF/Stun, weakness/resistance from `monster.element` (lowercase keys), layer buffs
-- Shiyu: floor tabs, ordered rooms with monster cards sorted by HP desc, buffs from `layer_buff`
-- Element icons: `IconFire.webp` etc. (not `Sprite/Element_Fire.webp`)
+- Admin users see inline zone ID edit forms that send ctl commands
+- Zone IDs are runtime variables on the server (not persisted in config) — set via ctl `ModHadalZoneSchedule`
 
 ### Admin hadal zone editing
-- POST `/admin/update-hadal-zone` — runs `scripts/update_hadal_zone.sh <server> <hadal_id> <new_zone>`
-- Script stops the server, updates config.zon, rebuilds and relaunches
-- Only visible to admin users (checked via `is_admin()`)
+- POST `/admin/update-hadal-zone` — calls `ctl::mod_hadal_entrance()` directly over UDP
+- No rebuild/restart needed — changes take effect immediately on the running server
 
 ---
 

@@ -1,13 +1,13 @@
 use crate::{
     app_state::AppState,
     auth::{get_session, html_escape_attr, redirect_to_login},
+    ctl,
     data::{
         hakushin::{load_hakushin_data, to_asset_url},
         templates::load_weapon_templates,
     },
     i18n::{Locale, locale_from_headers, t},
-    player_state::{load_player_save, resolve_player_uid, save_player_save},
-    remielle_save::WeaponItemSave,
+    player_state::{load_player_save, resolve_player_uid},
     utils::{audit_log, shared_page_css, svg_data_uri},
 };
 use axum::{
@@ -136,22 +136,11 @@ pub(crate) async fn weapon_update(
         return redirect_to_login(&original_uri.0);
     };
 
-    let locale = locale_from_headers(&headers);
-    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
 
-    let Some(mut save) = load_player_save(&state, uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
-    };
-
-    let Some(weapon) = save.weapon.iter_mut().find(|w| w.uid == weapon_uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
-    };
-
-    weapon.level = payload.level;
-    weapon.refine = payload.refine_level;
-
-    save_player_save(&state, uid, &save);
+    if let Err(e) = ctl::mod_weapon(&state.ctl_addr, uid, weapon_uid, payload.level as u8, 1, payload.refine_level as u8) {
+        return Html(format!("ctl error: {e}")).into_response();
+    }
 
     Redirect::to("/dashboard?tab=weapons").into_response()
 }
@@ -267,28 +256,14 @@ pub(crate) async fn weapon_add(
         return redirect_to_login(&original_uri.0);
     };
 
-    let locale = locale_from_headers(&headers);
-    let state = state.clone();
     let uid = resolve_player_uid(&state, session.uid);
 
-    let mut save = load_player_save(&state, uid).unwrap_or_default();
+    if let Err(e) = ctl::create_weapon(&state.ctl_addr, uid, payload.weapon_id as u16, 60, 5, payload.refine_level as u8) {
+        return Html(format!("ctl error: {e}")).into_response();
+    }
 
-    let next_uid = save.weapon.iter().map(|w| w.uid).max().unwrap_or(0) + 1;
-    let new_uid = next_uid.max(1);
-
-    let weapon = WeaponItemSave {
-        uid: new_uid,
-        id: payload.weapon_id,
-        level: 60,
-        star: 5,
-        refine: payload.refine_level,
-    };
-
-    save.weapon.push(weapon);
-    save_player_save(&state, uid, &save);
-
-    audit_log(&state.root_dir, &session.username, session.uid, "weapon_add", &format!("created weapon {}", new_uid));
-    Redirect::to(&format!("/weapon/{new_uid}")).into_response()
+    audit_log(&state.root_dir, &session.username, session.uid, "weapon_add", &format!("weapon_id={}", payload.weapon_id));
+    Redirect::to("/dashboard?tab=weapons").into_response()
 }
 
 pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale, filter_class: &str, filter_rarity: &str) -> String {

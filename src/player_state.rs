@@ -187,7 +187,10 @@ pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> u32 {
                 let uid_bytes: [u8; 8] = data[start..start + 8].try_into().unwrap();
                 let mapped_uid = u64::from_le_bytes(uid_bytes);
                 if mapped_uid == account_uid as u64 {
-                    return 666 + i as u32;
+                    let candidate = 1 + i as u32;
+                    if state.state_dir.join(format!("USD_{candidate}.bin")).exists() {
+                        return candidate;
+                    }
                 }
             }
         }
@@ -209,7 +212,7 @@ pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> u32 {
         }
     }
 
-    account_uid.max(666) as u32
+    account_uid.max(1) as u32
 }
 
 pub(crate) fn resolve_item_path(state_dir: &FsPath, uid: u32, kind: &str, item_id: u32) -> PathBuf {

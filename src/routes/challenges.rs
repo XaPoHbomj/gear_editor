@@ -3,7 +3,6 @@ use crate::{
     auth::{get_session, html_escape_text, redirect_to_login},
     i18n::{Locale, locale_from_headers, t},
     player_state::resolve_player_uid,
-    zon::read_zon,
 };
 use axum::{
     extract::{OriginalUri, Path, Query, State},
@@ -394,44 +393,36 @@ fn element_label(locale: Locale, element: &str) -> &str {
 }
 
 pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale, is_admin: bool) -> String {
-    let root = &state.root_dir;
+    let dummy_path = &state.dump_lang_dir(locale);
+
+    // Default zone IDs (from remielle gamesv Calendar.zig for boss_challenge_*)
+    // boss_details.json uses container IDs like 690421 with modes[]:
+    //   mode id=690421 zone_type=1001 (normal)
+    //   mode id=690422 zone_type=1002 (hardcore)
+    let defaults: [(u32, u32, u32); 3] = [
+        (620561, 690421, 690422),  // shiyu, DA normal, DA hard
+        (620561, 690421, 690422),
+        (620561, 690421, 690422),
+    ];
+
     let mut out = String::new();
 
-    for server in 1..=3 {
-        let config_path = root.join(format!("configs_remielle/server{}/config.zon", server));
-
-        let config_content = match fs::read_to_string(&config_path) {
-            Ok(c) => c,
-            Err(_) => {
-                out.push_str(&format!(
-                    r#"<div class="panel" style="display:block; margin-bottom:16px;">
-                        <h3>{} {}</h3>
-                        <p class="meta">{}</p>
-                    </div>"#,
-                    t(locale, "status.server"), server, t(locale, "status.config_not_found")
-                ));
-                continue;
-            }
-        };
-
-        let shiyu_zone = extract_entrance_zone(&config_content, "hadal_zone_scheduled");
-        let da_normal_zone = extract_entrance_zone(&config_content, "boss_challenge_normal");
-        let da_hard_zone = extract_entrance_zone(&config_content, "boss_challenge_hard");
-
-        let dump_dir = state.dump_lang_dir(locale);
-        let shiyu_details_path = dump_dir.join("shiyu_details.json");
-        let boss_details_path = dump_dir.join("boss_details.json");
-
-        let shiyu_card = render_status_card(locale, shiyu_zone, "/shiyu/", t(locale, "status.shiyu"), &shiyu_details_path, "shiyu", server, "hadal_zone_scheduled", is_admin);
-        let da_card = render_status_card(locale, da_normal_zone, "/da/", t(locale, "status.da"), &boss_details_path, "da", server, "boss_challenge_normal", is_admin);
-        let da_hard_card = render_status_card(locale, da_hard_zone, "/da/", t(locale, "status.da_hardcore"), &boss_details_path, "da", server, "boss_challenge_hard", is_admin);
-
+    for server_idx in 0..3 {
+        let server_num = server_idx as u32 + 1;
+        let (shiyu, da, da_hard) = defaults[server_idx];
         out.push_str(&format!(
             r#"<div class="panel" style="display:block; margin-bottom:16px;">
                 <h3 style="margin:0 0 14px 0; font-size:16px;">{} {}</h3>
-                <div class="cards">{}{}{}</div>
+                <div class="cards">
+                    {}
+                    {}
+                    {}
+                </div>
             </div>"#,
-            t(locale, "status.server"), server, shiyu_card, da_card, da_hard_card
+            t(locale, "status.server"), server_num,
+            render_status_card(locale, shiyu, "/shiyu/", t(locale, "status.shiyu"), dummy_path, "shiyu", server_num, "hadal_zone_scheduled", is_admin),
+            render_status_card(locale, da, "/da/", t(locale, "status.da"), dummy_path, "da", server_num, "boss_challenge_normal", is_admin),
+            render_status_card(locale, da_hard, "/da/", t(locale, "status.da_hardcore"), dummy_path, "da", server_num, "boss_challenge_hard", is_admin),
         ));
     }
 
@@ -515,39 +506,76 @@ fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &s
     )
 }
 
-fn lookup_zone_detail(details_path: &FsPath, zone_id: u32, kind: &str, locale: Locale) -> (String, Vec<String>) {
+fn extract_boss_names_from_zone(zone: &serde_json::Value, boss_names: &mut Vec<String>) {
+    if let Some(zone_name) = zone.get("name").and_then(|n| n.as_str()) {
+        if !zone_name.trim().is_empty() {
+            boss_names.push(zone_name.to_string());
+        }
+    }
+    if let Some(layer_room) = zone.get("layer_room").and_then(|r| r.as_object()) {
+        for room in layer_room.values() {
+            if let Some(monster_list) = room.get("monster_list").and_then(|m| m.as_object()) {
+                for monster in monster_list.values() {
+                    if let Some(monster_name) = monster.get("name").and_then(|n| n.as_str()) {
+                        if !monster_name.trim().is_empty() {
+                            boss_names.push(monster_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn lookup_zone_detail(details_path: &FsPath, zone_id: u32, _kind: &str, locale: Locale) -> (String, Vec<String>) {
     if let Ok(content) = fs::read_to_string(details_path) {
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(entry) = data.get(zone_id.to_string()) {
                 if let Some(name) = entry.get("name").and_then(|n| n.as_str()) {
-                    if !name.is_empty() {
+                    if !name.is_empty() && name != "Trial" {
                         return (name.to_string(), Vec::new());
                     }
                 }
                 let mut boss_names = Vec::new();
-                if let Some(zones) = entry.get("zone").and_then(|z| z.as_object()) {
-                    for zone in zones.values() {
-                        if let Some(zone_name) = zone.get("name").and_then(|n| n.as_str()) {
-                            if !zone_name.trim().is_empty() {
-                                boss_names.push(zone_name.to_string());
-                            }
-                        }
-                        if let Some(layer_room) = zone.get("layer_room").and_then(|r| r.as_object()) {
-                            for room in layer_room.values() {
-                                if let Some(monster_list) = room.get("monster_list").and_then(|m| m.as_object()) {
-                                    for monster in monster_list.values() {
-                                        if let Some(monster_name) = monster.get("name").and_then(|n| n.as_str()) {
-                                            if !monster_name.trim().is_empty() {
-                                                boss_names.push(monster_name.to_string());
-                                            }
-                                        }
-                                    }
-                                }
+                if let Some(modes) = entry.get("modes").and_then(|m| m.as_array()) {
+                    for mode in modes {
+                        if let Some(zones) = mode.get("zone").and_then(|z| z.as_object()) {
+                            for zone in zones.values() {
+                                extract_boss_names_from_zone(zone, &mut boss_names);
                             }
                         }
                     }
                 }
+                if let Some(zones) = entry.get("zone").and_then(|z| z.as_object()) {
+                    for zone in zones.values() {
+                        extract_boss_names_from_zone(zone, &mut boss_names);
+                    }
+                }
                 return (t(locale, "common.unknown").to_string(), boss_names);
+            }
+            // zone_id might be a mode ID inside a container. Search all entries.
+            if let Some(map) = data.as_object() {
+                let mut mode_boss_names = Vec::new();
+                for container in map.values() {
+                    if let Some(modes) = container.get("modes").and_then(|m| m.as_array()) {
+                        for mode in modes {
+                            if mode.get("id").and_then(|i| i.as_u64()).map(|i| i as u32) == Some(zone_id) {
+                            let mode_name = match mode.get("zone_type").and_then(|z| z.as_u64()) {
+                                Some(1001) => t(locale, "status.da"),
+                                Some(1002) => t(locale, "status.da_hardcore"),
+                                _ => t(locale, "common.unknown"),
+                            }.to_string();
+
+                            if let Some(zones) = mode.get("zone").and_then(|z| z.as_object()) {
+                                for zone in zones.values() {
+                                    extract_boss_names_from_zone(zone, &mut mode_boss_names);
+                                }
+                            }
+                            return (mode_name, mode_boss_names);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -563,240 +591,267 @@ pub(crate) async fn da_detail(
     let dump_dir = state.dump_lang_dir(locale);
     let boss_details_path = dump_dir.join("boss_details.json");
 
-    if let Ok(content) = fs::read_to_string(&boss_details_path) {
-        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(da_data) = data.get(id.to_string()) {
-                let da_name = da_data
+    let content = match fs::read_to_string(&boss_details_path) {
+        Ok(c) => c,
+        Err(_) => return Html(t(locale, "da.not_found").to_string()).into_response(),
+    };
+    let data: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(d) => d,
+        Err(_) => return Html(t(locale, "da.not_found").to_string()).into_response(),
+    };
+    let map = match data.as_object() {
+        Some(m) => m,
+        None => return Html(t(locale, "da.not_found").to_string()).into_response(),
+    };
+
+    // Find the entry: either a container ID (e.g. 690421) or a mode ID (e.g. 690422)
+    let (da_entry, da_name) = if let Some(entry) = map.get(&id.to_string()) {
+        if let Some(modes) = entry.get("modes").and_then(|m| m.as_array()) {
+            // Container with modes — pick the normal mode (zone_type 1001)
+            let normal_mode = modes.iter().find(|m| m.get("zone_type").and_then(|z| z.as_u64()) == Some(1001))
+                .or_else(|| modes.first());
+            match normal_mode {
+                Some(mode) => (mode.clone(), t(locale, "status.da").to_string()),
+                None => (entry.clone(), t(locale, "common.unknown").to_string()),
+            }
+        } else {
+            (entry.clone(), entry["name"].as_str().unwrap_or("").to_string())
+        }
+    } else {
+        // Search for a mode with this ID in any container
+        let mut found = None;
+        for container in map.values() {
+            if let Some(modes) = container.get("modes").and_then(|m| m.as_array()) {
+                for mode in modes {
+                    if mode.get("id").and_then(|i| i.as_u64()).map(|i| i as u32) == Some(id) {
+                        let zt = mode.get("zone_type").and_then(|z| z.as_u64());
+                        let name = match zt {
+                            Some(1001) => t(locale, "status.da"),
+                            Some(1002) => t(locale, "status.da_hardcore"),
+                            _ => t(locale, "common.unknown"),
+                        }.to_string();
+                        found = Some((mode.clone(), name));
+                        break;
+                    }
+                }
+            }
+            if found.is_some() { break; }
+        }
+        match found {
+            Some(v) => v,
+            None => return Html(t(locale, "da.not_found").to_string()).into_response(),
+        }
+    };
+
+    let mut buff_cards = String::new();
+    let mut boss_cards = String::new();
+    let empty_map = serde_json::Map::new();
+
+    let zones = da_entry
+        .get("zone")
+        .and_then(|z| z.as_object())
+        .unwrap_or(&empty_map);
+
+    for zone_val in zones.values() {
+        let selectable_buffs = zone_val
+            .get("selectable_buff")
+            .and_then(|b| b.as_object())
+            .unwrap_or(&empty_map);
+
+        let layer_room = zone_val
+            .get("layer_room")
+            .and_then(|r| r.as_object())
+            .unwrap_or(&empty_map);
+
+        let layer_buffs = zone_val
+            .get("layer_buff")
+            .and_then(|b| b.as_object())
+            .unwrap_or(&empty_map);
+
+        let mut layer_buffs_html = String::new();
+        for buff in layer_buffs.values() {
+            let buff_desc = buff.get("desc").and_then(|d| d.as_str()).unwrap_or("");
+            if clean_rich_text(buff_desc).is_empty() {
+                continue;
+            }
+            layer_buffs_html.push_str(&format!(
+                r#"<div style="padding: 8px 10px; border-radius: 8px; background: #10141d; margin-top: 8px; border-left: 3px solid #4c7dff; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</div>"#,
+                render_rich_text(buff_desc)
+            ));
+        }
+
+        let layer_buffs_section = if layer_buffs_html.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<div style="margin-top: 10px;">
+                    <div style="font-size: 12px; font-weight: 700; color: #8fb0ff; margin-bottom: 2px;">{}</div>
+                    {}
+                </div>"#,
+                t(locale, "da.layer_buffs"),
+                layer_buffs_html
+            )
+        };
+
+        for room in layer_room.values() {
+            let monster_list = room
+                .get("monster_list")
+                .and_then(|m| m.as_object())
+                .unwrap_or(&empty_map);
+
+            for monster in monster_list.values() {
+                let boss_name = monster
                     .get("name")
                     .and_then(|n| n.as_str())
                     .unwrap_or_else(|| t(locale, "common.unknown"));
 
-                let mut buff_cards = String::new();
-                let mut boss_cards = String::new();
-                let empty_map = serde_json::Map::new();
+                let boss_image = monster
+                    .get("image")
+                    .and_then(|img| img.as_str())
+                    .unwrap_or("");
 
-                if let Some(zones) = da_data.get("zone").and_then(|z| z.as_object()) {
-                    for zone in zones.values() {
-                        let selectable_buffs = zone
-                            .get("selectable_buff")
-                            .and_then(|b| b.as_object())
-                            .unwrap_or(&empty_map);
+                let image_html = if !boss_image.is_empty() {
+                    let base = boss_image_base_name(boss_image);
+                    let local_src = format!(
+                        "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{}.webp",
+                        base
+                    );
+                    format!(
+                        r#"<img class="boss-inline-thumb" src="{}" alt="{}" style="width: 220px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
+                        local_src, boss_name
+                    )
+                } else {
+                    String::new()
+                };
 
-                        let layer_room = zone
-                            .get("layer_room")
-                            .and_then(|r| r.as_object())
-                            .unwrap_or(&empty_map);
+                let stats = monster
+                    .get("stats")
+                    .and_then(|s| s.as_object())
+                    .unwrap_or(&empty_map);
+                let element = monster
+                    .get("element")
+                    .and_then(|e| e.as_object())
+                    .unwrap_or(&empty_map);
 
-                        let layer_buffs = zone
-                            .get("layer_buff")
-                            .and_then(|b| b.as_object())
-                            .unwrap_or(&empty_map);
+                let base_hp_value = stats.get("hp").and_then(|h| h.as_f64()).unwrap_or(0.0);
+                let hp = format_with_commas(da_total_hp_from_base(base_hp_value, id));
+                let base_hp = format_with_commas(base_hp_value.round() as i64);
+                let atk = format_stat_value(stats.get("attack").and_then(|a| a.as_f64()), locale);
+                let def = format_stat_value(stats.get("defence").and_then(|d| d.as_f64()), locale);
+                let stun = format_stat_value(stats.get("stun").and_then(|st| st.as_f64()), locale);
 
-                        let mut layer_buffs_html = String::new();
-                        for buff in layer_buffs.values() {
-                            let buff_desc = buff.get("desc").and_then(|d| d.as_str()).unwrap_or("");
-                            if clean_rich_text(buff_desc).is_empty() {
-                                continue;
+                let weakness_badges: Vec<String> = element
+                    .iter()
+                    .filter_map(|(e, v)| {
+                        if v.as_i64() == Some(1) {
+                            let ip = element_icon_path(e);
+                            let lb = element_label(locale, e);
+                            if ip.is_empty() || lb.is_empty() { None }
+                            else {
+                                Some(format!(
+                                    r#"<span style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; vertical-align:middle;"><img src="{}" alt="{}" title="{}" style="width: 18px; height: 18px; display:block;" />{}</span>"#,
+                                    ip, lb, lb, lb
+                                ))
                             }
-                            layer_buffs_html.push_str(&format!(
-                                r#"<div style="padding: 8px 10px; border-radius: 8px; background: #10141d; margin-top: 8px; border-left: 3px solid #4c7dff; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</div>"#,
-                                render_rich_text(buff_desc)
-                            ));
-                        }
+                        } else { None }
+                    })
+                    .collect();
+                let weakness_str = weakness_badges.join("");
 
-                        let layer_buffs_section = if layer_buffs_html.is_empty() {
-                            String::new()
-                        } else {
-                            format!(
-                                r#"<div style="margin-top: 10px;">
-                                    <div style="font-size: 12px; font-weight: 700; color: #8fb0ff; margin-bottom: 2px;">{}</div>
-                                    {}
-                                </div>"#,
-                                t(locale, "da.layer_buffs"),
-                                layer_buffs_html
-                            )
-                        };
-
-                        for room in layer_room.values() {
-                            let monster_list = room
-                                .get("monster_list")
-                                .and_then(|m| m.as_object())
-                                .unwrap_or(&empty_map);
-
-                            for monster in monster_list.values() {
-                                let boss_name = monster
-                                    .get("name")
-                                    .and_then(|n| n.as_str())
-                                    .unwrap_or_else(|| t(locale, "common.unknown"));
-
-                                let boss_image = monster
-                                    .get("image")
-                                    .and_then(|img| img.as_str())
-                                    .unwrap_or("");
-
-                                let image_html = if !boss_image.is_empty() {
-                                    let base = boss_image_base_name(boss_image);
-                                    let local_src = format!(
-                                        "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/{}.webp",
-                                        base
-                                    );
-                                    format!(
-                                        r#"<img class="boss-inline-thumb" src="{}" alt="{}" style="width: 220px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
-                                        local_src, boss_name
-                                    )
-                                } else {
-                                    String::new()
-                                };
-
-                                let stats = monster
-                                    .get("stats")
-                                    .and_then(|s| s.as_object())
-                                    .unwrap_or(&empty_map);
-                                let element = monster
-                                    .get("element")
-                                    .and_then(|e| e.as_object())
-                                    .unwrap_or(&empty_map);
-
-                                let base_hp_value =
-                                    stats.get("hp").and_then(|h| h.as_f64()).unwrap_or(0.0);
-                                let hp = format_with_commas(da_total_hp_from_base(base_hp_value, id));
-                                let base_hp = format_with_commas(base_hp_value.round() as i64);
-                                let atk = format_stat_value(stats.get("attack").and_then(|a| a.as_f64()), locale);
-                                let def = format_stat_value(stats.get("defence").and_then(|d| d.as_f64()), locale);
-                                let stun = format_stat_value(stats.get("stun").and_then(|st| st.as_f64()), locale);
-
-                                let weakness_badges: Vec<String> = element
-                                    .iter()
-                                    .filter_map(|(e, v)| {
-                                        if v.as_i64() == Some(1) {
-                                            let icon_path = element_icon_path(e);
-                                            let label = element_label(locale, e);
-                                            if icon_path.is_empty() || label.is_empty() {
-                                                None
-                                            } else {
-                                                Some(format!(
-                                                    r#"<span style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; vertical-align:middle;"><img src="{}" alt="{}" title="{}" style="width: 18px; height: 18px; display:block;" />{}</span>"#,
-                                                    icon_path, label, label, label
-                                                ))
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                let weakness_str = weakness_badges.join("");
-
-                                let resistance_badges: Vec<String> = element
-                                    .iter()
-                                    .filter_map(|(e, v)| {
-                                        if v.as_i64() == Some(-1) {
-                                            let icon_path = element_icon_path(e);
-                                            let label = element_label(locale, e);
-                                            if icon_path.is_empty() || label.is_empty() {
-                                                None
-                                            } else {
-                                                Some(format!(
-                                                    r#"<span style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; vertical-align:middle;"><img src="{}" alt="{}" title="{}" style="width: 18px; height: 18px; display:block;" />{}</span>"#,
-                                                    icon_path, label, label, label
-                                                ))
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                let resistance = resistance_badges.join("");
-
-                                boss_cards.push_str(&format!(
-                                    r#"<div class="card" style="background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; display: flex; gap: 16px; align-items: stretch; justify-content: space-between; flex-wrap: nowrap; min-height: 220px;">
-                                        <div style="flex: 1 1 260px; min-width: 240px;">
-                                            <h3>{boss_name}</h3>
-                                            <div style="margin-top: 12px; font-size: 13px; color: #c7d1e0; line-height: 1.45;">
-                                                <div style="margin-bottom: 6px;"><strong>{hp_label}:</strong> {hp}</div>
-                                                <div style="margin-bottom: 6px;"><strong>{base_hp_label}:</strong> {base_hp}</div>
-                                                <div style="margin-bottom: 6px;"><strong>{atk_label}:</strong> {atk}</div>
-                                                <div style="margin-bottom: 6px;"><strong>{def_label}:</strong> {def}</div>
-                                                <div style="margin-bottom: 6px;"><strong>{stun_label}:</strong> {stun}</div>
-                                                {weakness_html}
-                                                {resistance_html}
-                                                {layer_buffs_section}
-                                            </div>
-                                        </div>
-                                        {image_html}
-                                    </div>"#,
-                                    boss_name = boss_name,
-                                    hp = hp,
-                                    base_hp = base_hp,
-                                    atk = atk,
-                                    def = def,
-                                    stun = stun,
-                                    hp_label = t(locale, "stat.hp"),
-                                    base_hp_label = t(locale, "stat.base_hp"),
-                                    atk_label = t(locale, "stat.atk"),
-                                    def_label = t(locale, "stat.def"),
-                                    stun_label = t(locale, "stat.stun"),
-                                    weakness_html = if !weakness_str.is_empty() {
-                                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:6px;\"><strong>{weakness_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", weakness_str, weakness_label = t(locale, "stat.weakness"))
-                                    } else {
-                                        String::new()
-                                    },
-                                    resistance_html = if !resistance.is_empty() {
-                                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>{resistance_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", resistance, resistance_label = t(locale, "stat.resistance"))
-                                    } else {
-                                        String::new()
-                                    },
-                                    layer_buffs_section = layer_buffs_section
-                                ));
+                let resistance_badges: Vec<String> = element
+                    .iter()
+                    .filter_map(|(e, v)| {
+                        if v.as_i64() == Some(-1) {
+                            let ip = element_icon_path(e);
+                            let lb = element_label(locale, e);
+                            if ip.is_empty() || lb.is_empty() { None }
+                            else {
+                                Some(format!(
+                                    r#"<span style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; vertical-align:middle;"><img src="{}" alt="{}" title="{}" style="width: 18px; height: 18px; display:block;" />{}</span>"#,
+                                    ip, lb, lb, lb
+                                ))
                             }
-                        }
+                        } else { None }
+                    })
+                    .collect();
+                let resistance = resistance_badges.join("");
 
-                        if buff_cards.is_empty() && !selectable_buffs.is_empty() {
-                            let mut buffs_html = String::new();
-                            for (_, buff) in selectable_buffs.iter().take(3) {
-                                let buff_title =
-                                    buff.get("title").and_then(|t| t.as_str()).unwrap_or_else(|| t(locale, "common.buff"));
+                boss_cards.push_str(&format!(
+                    r#"<div class="card" style="background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; display: flex; gap: 16px; align-items: stretch; justify-content: space-between; flex-wrap: nowrap; min-height: 220px;">
+                        <div style="flex: 1 1 260px; min-width: 240px;">
+                            <h3>{boss_name}</h3>
+                            <div style="margin-top: 12px; font-size: 13px; color: #c7d1e0; line-height: 1.45;">
+                                <div style="margin-bottom: 6px;"><strong>{hp_label}:</strong> {hp}</div>
+                                <div style="margin-bottom: 6px;"><strong>{base_hp_label}:</strong> {base_hp}</div>
+                                <div style="margin-bottom: 6px;"><strong>{atk_label}:</strong> {atk}</div>
+                                <div style="margin-bottom: 6px;"><strong>{def_label}:</strong> {def}</div>
+                                <div style="margin-bottom: 6px;"><strong>{stun_label}:</strong> {stun}</div>
+                                {weakness_html}
+                                {resistance_html}
+                                {layer_buffs_section}
+                            </div>
+                        </div>
+                        {image_html}
+                    </div>"#,
+                    boss_name = boss_name,
+                    hp = hp,
+                    base_hp = base_hp,
+                    atk = atk,
+                    def = def,
+                    stun = stun,
+                    hp_label = t(locale, "stat.hp"),
+                    base_hp_label = t(locale, "stat.base_hp"),
+                    atk_label = t(locale, "stat.atk"),
+                    def_label = t(locale, "stat.def"),
+                    stun_label = t(locale, "stat.stun"),
+                    weakness_html = if !weakness_str.is_empty() {
+                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:6px;\"><strong>{weakness_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", weakness_str, weakness_label = t(locale, "stat.weakness"))
+                    } else {
+                        String::new()
+                    },
+                    resistance_html = if !resistance.is_empty() {
+                        format!("<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>{resistance_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>", resistance, resistance_label = t(locale, "stat.resistance"))
+                    } else {
+                        String::new()
+                    },
+                    layer_buffs_section = layer_buffs_section,
+                ));
+            }
+        }
 
-                                let buff_desc = buff
-                                    .get("desc")
-                                    .and_then(|d| d.as_str())
-                                    .unwrap_or_else(|| t(locale, "common.no_description"));
+        if buff_cards.is_empty() && !selectable_buffs.is_empty() {
+            let mut buffs_html = String::new();
+            for (_, buff) in selectable_buffs.iter().take(3) {
+                let buff_title = buff.get("title").and_then(|t| t.as_str()).unwrap_or_else(|| t(locale, "common.buff"));
+                let buff_desc = buff.get("desc").and_then(|d| d.as_str()).unwrap_or_else(|| t(locale, "common.no_description"));
+                let clean_desc = clean_rich_text(buff_desc);
+                let rich_desc = render_rich_text(buff_desc);
+                if buff_title.trim().is_empty() && clean_desc.is_empty() { continue; }
+                let display_title = if buff_title.trim().is_empty() { t(locale, "common.buff") } else { buff_title };
 
-                                let clean_desc = clean_rich_text(buff_desc);
-                                let rich_desc = render_rich_text(buff_desc);
-                                if buff_title.trim().is_empty() && clean_desc.is_empty() {
-                                    continue;
-                                }
-                                let display_title = if buff_title.trim().is_empty() {
-                                    t(locale, "common.buff")
-                                } else {
-                                    buff_title
-                                };
+                buffs_html.push_str(&format!(
+                    r#"<div style="margin-bottom: 12px; padding: 10px; background: #121620; border-radius: 8px; border-left: 3px solid #4c7dff;">
+                        <h4 style="margin: 0 0 6px 0; color: #4c7dff;">{}</h4>
+                        <p style="margin: 0; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</p>
+                    </div>"#,
+                    display_title, rich_desc
+                ));
+            }
+            if !buffs_html.is_empty() {
+                buff_cards.push_str(&format!(
+                    r#"<div class="card" style="background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; grid-column: span 1;">
+                        <h3>{}</h3>
+                        {}
+                    </div>"#,
+                    t(locale, "da.selectable_buffs"),
+                    buffs_html
+                ));
+            }
+        }
+    }
 
-                                buffs_html.push_str(&format!(
-                                    r#"<div style="margin-bottom: 12px; padding: 10px; background: #121620; border-radius: 8px; border-left: 3px solid #4c7dff;">
-                                        <h4 style="margin: 0 0 6px 0; color: #4c7dff;">{}</h4>
-                                        <p style="margin: 0; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</p>
-                                    </div>"#,
-                                    display_title, rich_desc
-                                ));
-                            }
-
-                            if !buffs_html.is_empty() {
-                                buff_cards.push_str(&format!(
-                                    r#"<div class="card" style="background: #1b1f2a; padding: 14px; border-radius: 12px; border: 1px solid #232a38; grid-column: span 1;">
-                                        <h3>{}</h3>
-                                        {}
-                                    </div>"#,
-                                    t(locale, "da.selectable_buffs"),
-                                    buffs_html
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                let html = format!(
-                    r#"<!doctype html>
+    let html = format!(
+        r#"<!doctype html>
 <html lang="{lang}">
 <head>
   <meta charset="utf-8" />
@@ -804,7 +859,7 @@ pub(crate) async fn da_detail(
   <title>{da_name} - Gear Editor</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
-        header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; }}
+    header {{ padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #151a24; }}
     .back {{ padding: 8px 12px; border-radius: 8px; background: #4c7dff; color: #fff; text-decoration: none; font-weight: 600; }}
     .container {{ padding: 20px 24px 40px; }}
     h1 {{ margin: 0 0 20px 0; font-size: 28px; }}
@@ -812,46 +867,45 @@ pub(crate) async fn da_detail(
     .card {{ background: #1b1f2a; padding: 16px; border-radius: 12px; border: 1px solid #232a38; }}
     .card h3 {{ margin: 0 0 12px 0; font-size: 18px; }}
     .meta {{ color: #9aa4b2; font-size: 12px; }}
-        .cards .card img {{ display: block; }}
-        .cards .card img {{ max-width: 100%; height: auto; }}
-        .cards .card > div:first-child {{ min-width: 0; }}
-        @media (max-width: 768px) {{
-            header {{ padding: 12px 14px; flex-direction: column; align-items: stretch; }}
-            header > a, header > form {{ width: 100%; box-sizing: border-box; }}
-            header > a {{ align-self: stretch; text-align: center; }}
-            header > form button {{ width: 100%; box-sizing: border-box; }}
-            .container {{ padding: 14px; }}
-            h1 {{ font-size: 22px; }}
-            .card {{ padding: 12px; }}
-            .cards .card {{ flex-direction: column; align-items: stretch; }}
-            .cards .card img {{ width: min(100%, 320px); max-width: 100%; height: auto; margin: 0 auto; }}
-            .cards .card img.boss-inline-thumb {{ width: min(100%, 320px) !important; max-width: 100% !important; height: auto !important; margin: 0 auto; }}
-        }}
+    .cards .card img {{ display: block; max-width: 100%; height: auto; }}
+    .cards .card > div:first-child {{ min-width: 0; }}
+    @media (max-width: 768px) {{
+        header {{ padding: 12px 14px; flex-direction: column; align-items: stretch; }}
+        header > a, header > form {{ width: 100%; box-sizing: border-box; }}
+        header > a {{ align-self: stretch; text-align: center; }}
+        header > form button {{ width: 100%; box-sizing: border-box; }}
+        .container {{ padding: 14px; }}
+        h1 {{ font-size: 22px; }}
+        .card {{ padding: 12px; }}
+        .cards .card {{ flex-direction: column; align-items: stretch; }}
+        .cards .card img {{ width: min(100%, 320px); max-width: 100%; height: auto; margin: 0 auto; }}
+        .cards .card img.boss-inline-thumb {{ width: min(100%, 320px) !important; max-width: 100% !important; height: auto !important; margin: 0 auto; }}
+    }}
   </style>
 </head>
 <body>
 <header>
-  <a href="/dashboard?tab=status" class="back">{2}</a>
+  <a href="/dashboard?tab=status" class="back">{back_link}</a>
 </header>
 <div class="container">
-  <h1>{0} {3} {1}</h1>
+  <h1>{da_name} {id_label}: {id}</h1>
   <div class="cards">
-    {4}
-    {5}
+    {buff_cards}
+    {boss_cards}
   </div>
 </div>
 </body>
 </html>"#,
-                    da_name, id, t(locale, "status.back"), t(locale, "common.id"), buff_cards, boss_cards,
-                    lang = locale.lang_attr()
-                    );
+        lang = locale.lang_attr(),
+        da_name = da_name,
+        back_link = t(locale, "status.back"),
+        id_label = t(locale, "common.id"),
+        id = id,
+        buff_cards = buff_cards,
+        boss_cards = boss_cards,
+    );
 
-                return Html(html).into_response();
-            }
-        }
-    }
-
-    Html(t(locale, "da.not_found").to_string()).into_response()
+    Html(html).into_response()
 }
 
 pub(crate) async fn shiyu_detail(

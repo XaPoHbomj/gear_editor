@@ -1,6 +1,7 @@
 use crate::{
     app_state::AppState,
     auth::{get_session, html_escape_attr, redirect_to_login},
+    ctl,
     data::{
         hakushin::{load_hakushin_data, to_asset_url},
         templates::{
@@ -9,7 +10,7 @@ use crate::{
         },
     },
     i18n::{Locale, locale_from_headers, t},
-    player_state::{load_player_save, parse_slot_value, resolve_player_uid, save_player_save},
+    player_state::{load_player_save, parse_slot_value, resolve_player_uid},
     remielle_save::AvatarItemSave,
     utils::{audit_log, shared_page_css, svg_data_uri},
     zon::zon_parse_entries,
@@ -168,43 +169,36 @@ pub(crate) async fn avatar_update(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
-    let uid = resolve_player_uid(&state, session.uid);
     let locale = locale_from_headers(&headers);
+    let uid = resolve_player_uid(&state, session.uid);
 
-    let mut save = load_player_save(&state, uid).unwrap_or_default();
+    let addr = &state.ctl_addr;
 
-    let Some(avatar_item) = save.avatar.iter_mut().find(|a| a.id == avatar_id) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "avatar.not_found"))).into_response();
-    };
-
-    avatar_item.level = payload.level;
-    avatar_item.rank = payload.unlocked_talent_num;
-    avatar_item.weapon_uid = payload.cur_weapon_uid;
-
-    let equipped = vec![
-        parse_slot_value(&payload.equip_slot_1),
-        parse_slot_value(&payload.equip_slot_2),
-        parse_slot_value(&payload.equip_slot_3),
-        parse_slot_value(&payload.equip_slot_4),
-        parse_slot_value(&payload.equip_slot_5),
-        parse_slot_value(&payload.equip_slot_6),
-    ];
-    avatar_item.equipment_uids = equipped;
-
-    let mut skill_levels = avatar_item.skill_levels.clone();
-    if skill_levels.len() < 7 {
-        skill_levels.resize(7, 1);
+    if let Err(e) = ctl::mod_avatar_meta(addr, uid, avatar_id, 0, payload.level as u64) {
+        return Html(format!("ctl error (level): {e}")).into_response();
     }
-    skill_levels[0] = payload.skill_common_attack;
-    skill_levels[1] = payload.skill_special_attack;
-    skill_levels[2] = payload.skill_evade;
-    skill_levels[3] = payload.skill_cooperate_skill;
-    skill_levels[5] = payload.core_ability;
-    skill_levels[6] = payload.skill_assist_skill;
-    avatar_item.skill_levels = skill_levels;
 
-    save_player_save(&state, uid, &save);
+    if let Err(e) = ctl::mod_avatar_meta(addr, uid, avatar_id, 2, payload.unlocked_talent_num as u64) {
+        return Html(format!("ctl error (rank): {e}")).into_response();
+    }
+
+    let skill_map: [(u32, u32); 6] = [
+        (0, payload.skill_common_attack),
+        (1, payload.skill_special_attack),
+        (2, payload.skill_evade),
+        (3, payload.skill_cooperate_skill),
+        (5, payload.core_ability),
+        (6, payload.skill_assist_skill),
+    ];
+
+    for &(skill_id, level) in &skill_map {
+        let packed = (skill_id as u64) | ((level as u64) << 32);
+        if let Err(e) = ctl::mod_avatar_meta(addr, uid, avatar_id, 5, packed) {
+            return Html(format!("ctl error (skill {skill_id}): {e}")).into_response();
+        }
+    }
+
+    audit_log(&state.root_dir, &session.username, session.uid, "avatar_update", &format!("avatar_id={}", avatar_id));
 
     Redirect::to("/dashboard?tab=avatars").into_response()
 }
@@ -298,12 +292,12 @@ pub(crate) async fn avatar_add_all(
     };
 
     let locale = locale_from_headers(&headers);
-    let active_state = state.clone();
-    let uid = resolve_player_uid(&active_state, session.uid);
+    let uid = resolve_player_uid(&state, session.uid);
 
-    let mut save = load_player_save(&active_state, uid).unwrap_or_default();
+    let save = load_player_save(&state, uid).unwrap_or_default();
+    let existing: std::collections::HashSet<u32> = save.avatar.iter().map(|a| a.id).collect();
 
-    let base_path = active_state.asset_dir.join("AvatarBaseTemplateTb.zon");
+    let base_path = state.asset_dir.join("AvatarBaseTemplateTb.zon");
     let base_data = match fs::read_to_string(&base_path) {
         Ok(d) => d,
         Err(_) => {
@@ -313,44 +307,37 @@ pub(crate) async fn avatar_add_all(
     let entries = zon_parse_entries(&base_data);
 
     let pidors: &[u32] = &[];
+    let addr = &state.ctl_addr;
+    let mut added = 0u32;
 
     for item in &entries {
         let Some(template_id) = item.get("id").and_then(|v| v.parse::<u32>().ok()) else {
             continue;
         };
         let camp = item.get("camp").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-        if camp == 0 {
-            continue;
-        }
-            if pidors.contains(&template_id) {
-                continue;
-            }
-            if save.avatar.iter().any(|a| a.id == template_id) {
-                continue;
-            }
+        if camp == 0 { continue; }
+        if pidors.contains(&template_id) { continue; }
+        if existing.contains(&template_id) { continue; }
 
-            save.avatar.push(AvatarItemSave {
-                id: template_id,
-                level: 60,
-                exp: 0,
-                rank: 6,
-                talents: 2047,
-                talent_switch: 0,
-                favorite: false,
-                skill_levels: vec![12, 12, 12, 12, 12, 12, 12],
-                skin_id: 0,
-                awake_available: false,
-                awake_enabled: false,
-                awake_id: 0,
-                weapon_uid: 0,
-                equipment_uids: vec![0, 0, 0, 0, 0, 0],
-                awake_material_count: 0,
-            });
+        if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 0, 60) {
+            return Html(format!("ctl error (level) avatar {template_id}: {e}")).into_response();
+        }
+        if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 2, 6) {
+            return Html(format!("ctl error (rank) avatar {template_id}: {e}")).into_response();
+        }
+        if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 3, 2047) {
+            return Html(format!("ctl error (talents) avatar {template_id}: {e}")).into_response();
+        }
+        for &skill in &[0u32, 1, 2, 3, 5, 6] {
+            let packed = (skill as u64) | ((12u64) << 32);
+            if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 5, packed) {
+                return Html(format!("ctl error (skill) avatar {template_id}: {e}")).into_response();
+            }
+        }
+
+        added += 1;
     }
 
-    save_player_save(&active_state, uid, &save);
-
-    audit_log(&active_state.root_dir, &session.username, session.uid, "avatar_add_all", "added all missing agents");
-
+    audit_log(&state.root_dir, &session.username, session.uid, "avatar_add_all", &format!("added {} agents", added));
     Redirect::to("/dashboard?tab=avatars").into_response()
 }

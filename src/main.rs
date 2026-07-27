@@ -12,7 +12,7 @@ use tower_http::compression::CompressionLayer;
 mod app_state;
 mod assets;
 mod auth;
-mod config;
+mod ctl;
 mod data;
 mod domain;
 mod i18n;
@@ -26,7 +26,6 @@ mod zon;
 use app_state::AppState;
 use assets::asset_handler;
 use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_encode_component};
-use config::{load_sdk_config, resolve_db_path, resolve_sdk_config_path};
 use i18n::{Locale, locale_from_headers, t};
 use player_state::resolve_player_uid;
 use routes::auth::{login, login_page, logout};
@@ -64,10 +63,6 @@ struct SetLangQuery {
 
 #[tokio::main]
 async fn main() {
-    let config_path = resolve_sdk_config_path();
-    let config = load_sdk_config(&config_path);
-    let db_path = resolve_db_path(&config_path, &config.db_file);
-
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let state_dir = env::var("GEAR_STATE_DIR")
         .map(PathBuf::from)
@@ -79,12 +74,14 @@ async fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("zzz_dump/latest"));
 
+    let ctl_addr = env::var("GEAR_CTL_ADDRESS").unwrap_or_else(|_| "127.0.0.1:15811".to_string());
+
     let state = AppState {
-        db_path,
         state_dir,
         asset_dir,
         dump_dir,
         root_dir: root,
+        ctl_addr,
     };
 
     let app = Router::new()

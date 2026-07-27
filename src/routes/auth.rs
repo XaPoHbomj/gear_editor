@@ -110,8 +110,8 @@ pub(crate) async fn login(
 ) -> impl IntoResponse {
     let _locale = locale_from_headers(&headers);
     let username = payload.username.trim().to_string();
-    let response: Response = match validate_login(&state.db_path, &username, &payload.password) {
-        Ok(Some(session)) => {
+    let response: Response = match validate_login(&state, &username, &payload.password) {
+        Ok(Some((session, _is_admin))) => {
             let uid = session.uid;
             let session_id = insert_session(session);
 
