@@ -105,7 +105,7 @@ pub fn mod_avatar_meta(
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, avatar_id);
     write_u8(&mut buf, &mut p, field);
-    send_and_ack(addr, &buf[..p])
+    broadcast(addr, &buf[..p])
 }
 
 const WEAPON_UID_BASE: u32 = 0x01_00_00;
@@ -127,7 +127,7 @@ pub fn create_weapon(
     write_u32_le(&mut buf, &mut p, 1); // count = 1
     write_u16_le(&mut buf, &mut p, item_id);
     write_u16_le(&mut buf, &mut p, pack_weapon_meta(level, star, refine));
-    send_and_ack(addr, &buf[..p])
+    broadcast(addr, &buf[..p])
 }
 
 pub fn mod_weapon(
@@ -145,7 +145,7 @@ pub fn mod_weapon(
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, WEAPON_UID_BASE + weapon_uid_in_save);
     write_u16_le(&mut buf, &mut p, pack_weapon_meta(level, star, refine));
-    send_and_ack(addr, &buf[..p])
+    broadcast(addr, &buf[..p])
 }
 
 pub fn delete_weapon(addr: &str, player_uid: u32, weapon_uid_in_save: u32) -> Result<(), String> {
@@ -155,7 +155,7 @@ pub fn delete_weapon(addr: &str, player_uid: u32, weapon_uid_in_save: u32) -> Re
     let mut p = HEADER_SIZE;
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, WEAPON_UID_BASE + weapon_uid_in_save);
-    send_and_ack(addr, &buf[..p])
+    broadcast(addr, &buf[..p])
 }
 
 pub fn create_equip(
@@ -177,7 +177,7 @@ pub fn create_equip(
     }
     write_u16_le(&mut buf, &mut p, item_id);
     write_u16_le(&mut buf, &mut p, pack_equip_meta(level, star));
-    send_and_ack(addr, &buf[..p])
+    broadcast(addr, &buf[..p])
 }
 
 pub fn mod_equip(
@@ -199,7 +199,7 @@ pub fn mod_equip(
     for &(key, base, add) in properties {
         write_u32_le(&mut buf, &mut p, pack_equip_property(key, base, add));
     }
-    send_and_ack(addr, &buf[..p])
+    broadcast(addr, &buf[..p])
 }
 
 pub fn delete_equip(addr: &str, player_uid: u32, equip_uid_in_save: u32) -> Result<(), String> {
@@ -209,7 +209,32 @@ pub fn delete_equip(addr: &str, player_uid: u32, equip_uid_in_save: u32) -> Resu
     let mut p = HEADER_SIZE;
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, EQUIP_UID_BASE + equip_uid_in_save);
-    send_and_ack(addr, &buf[..p])
+    broadcast(addr, &buf[..p])
+}
+
+/// Send to all 3 servers (port, port+1, port+2). Returns Ok if at least one ACKs.
+/// Ignores no_entry (reason=5, player not online on that server).
+fn broadcast(base_addr: &str, data: &[u8]) -> Result<(), String> {
+    let (host, port_str) = base_addr
+        .rsplit_once(':')
+        .ok_or_else(|| "no port in address".to_string())?;
+    let base_port: u32 = port_str.parse().map_err(|_| "invalid port".to_string())?;
+    let mut last_err = String::new();
+    for offset in 0..3 {
+        let addr = format!("{}:{}", host, base_port + offset);
+        match send_and_ack(&addr, data) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                // no_entry (code=5) means player not on this server — expected
+                if !e.contains("code=5") {
+                    last_err = e;
+                } else if last_err.is_empty() {
+                    last_err = e;
+                }
+            }
+        }
+    }
+    Err(last_err)
 }
 
 pub fn mod_hadal_entrance(addr: &str, entrance_id: u32, zone_id: u32) -> Result<(), String> {
