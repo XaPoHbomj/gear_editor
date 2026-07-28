@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::{fs, path::Path as FsPath};
 
 #[derive(Deserialize)]
@@ -408,6 +409,44 @@ fn element_label(locale: Locale, element: &str) -> &str {
     }
 }
 
+fn read_calendar_entrance_zones(state: &AppState, root_dir: &FsPath) -> HashMap<u32, u32> {
+    // Try state_dir first (bin_remielle/Persistent/LocalStorage/), then fall back to
+    // the server's CWD directory (remielle/Persistent/LocalStorage/ for serve-all).
+    let paths = [
+        state.state_dir.join("CALENDAR.bin"),
+        root_dir.join("remielle/Persistent/LocalStorage/CALENDAR.bin"),
+    ];
+    let data = paths.iter().find_map(|p| fs::read(p).ok());
+    let Some(data) = data else {
+        return HashMap::new();
+    };
+    if data.len() < 4 {
+        return HashMap::new();
+    }
+    let _version = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    let mut map = HashMap::new();
+    if data.len() < 8 {
+        return map;
+    }
+    let count = (data.len() - 4) / 4;
+    for i in 0..count.min(17) {
+        let offset = 4 + i * 4;
+        if offset + 4 > data.len() {
+            break;
+        }
+        let zone = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]);
+        if zone != 0 {
+            map.insert(i as u32, zone);
+        }
+    }
+    map
+}
+
 pub(crate) fn render_da_shiyu_status(
     state: &AppState,
     _uid: u32,
@@ -416,14 +455,27 @@ pub(crate) fn render_da_shiyu_status(
 ) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
-    // Default zone IDs (from remielle gamesv Calendar.zig for boss_challenge_*)
-    // boss_details.json uses container IDs like 690421 with modes[]:
-    //   mode id=690421 zone_type=1001 (normal)
-    //   mode id=690422 zone_type=1002 (hardcore)
+    let calendar_zones = read_calendar_entrance_zones(state, &state.root_dir);
+    let get_zone = |entrance_index: u32| -> u32 {
+        calendar_zones.get(&entrance_index).copied().unwrap_or(0)
+    };
+
     let defaults: [(u32, u32, u32); 3] = [
-        (620561, 690421, 690422), // shiyu, DA normal, DA hard
-        (620561, 690421, 690422),
-        (620561, 690421, 690422),
+        (
+            get_zone(1),  // hadal_zone_scheduled
+            get_zone(9),  // boss_challenge_normal
+            get_zone(16), // boss_challenge_hard
+        ),
+        (
+            get_zone(1),
+            get_zone(9),
+            get_zone(16),
+        ),
+        (
+            get_zone(1),
+            get_zone(9),
+            get_zone(16),
+        ),
     ];
 
     let mut out = String::new();
