@@ -1,6 +1,6 @@
 use crate::remielle_save::{EquipItemSave, PlayerSave};
 use crate::{
-    app_state::AppState,
+    app_state::{self, AppState},
     auth::{get_session, html_escape_attr, redirect_to_login},
     ctl,
     data::{
@@ -129,13 +129,13 @@ pub(crate) async fn equip_edit(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&state, _session.uid) else {
+    let Some(uid) = resolve_player_uid(&active_state, _session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
-    let Some(save) = load_player_save(&state, uid) else {
+    let Some(save) = load_player_save(&active_state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
@@ -146,8 +146,8 @@ pub(crate) async fn equip_edit(
     let level = equip.level;
     let star = equip.star;
     let equip_item_id = equip.id;
-    let hakushin = load_hakushin_data(&state, locale);
-    let equip_index = load_equip_template_index(&state.asset_dir);
+    let hakushin = load_hakushin_data(&active_state, locale);
+    let equip_index = load_equip_template_index(&active_state.asset_dir);
     let set_id = equip_set_id(equip_item_id, &equip_index);
     let num_slot = equip_slot(equip_item_id, &equip_index);
     let equip_name = hakushin
@@ -282,13 +282,14 @@ pub(crate) async fn equip_update(
         return redirect_to_login(&original_uri.0);
     };
 
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&state, _session.uid) else {
+    let Some(uid) = resolve_player_uid(&active_state, _session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
-    let equip_index = load_equip_template_index(&state.asset_dir);
-    let save = load_player_save(&state, uid);
+    let equip_index = load_equip_template_index(&active_state.asset_dir);
+    let save = load_player_save(&active_state, uid);
 
     let slot = save
         .as_ref()
@@ -322,7 +323,7 @@ pub(crate) async fn equip_update(
     }
 
     if let Err(e) = ctl::mod_equip(
-        state.active_ctl_addr(&headers),
+        active_state.active_ctl_addr(&headers),
         uid,
         equip_uid,
         payload.level as u8,
@@ -344,12 +345,12 @@ pub(crate) async fn equip_new(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
 
-    let options = render_disc_select_options(&state, 0, locale);
+    let options = render_disc_select_options(&active_state, 0, locale);
     let disc_images: HashMap<u32, String> = {
-        let h = load_hakushin_data(&state, locale);
+        let h = load_hakushin_data(&active_state, locale);
         h.discs
             .iter()
             .map(|(id, entry)| {
@@ -495,12 +496,13 @@ pub(crate) async fn equip_add(
         return redirect_to_login(&original_uri.0);
     };
 
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
-    let equip_index = load_equip_template_index(&state.asset_dir);
+    let equip_index = load_equip_template_index(&active_state.asset_dir);
     let Some(item_id) =
         resolve_equip_item_id(payload.equip_set_id, payload.equip_slot, &equip_index)
     else {
@@ -540,7 +542,7 @@ pub(crate) async fn equip_add(
     }
 
     if let Err(e) = ctl::create_equip(
-        state.active_ctl_addr(&headers),
+        active_state.active_ctl_addr(&headers),
         uid,
         item_id as u16,
         15,
@@ -569,12 +571,12 @@ pub(crate) async fn equip_generate(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
 
-    let options = render_disc_select_options(&state, 0, locale);
+    let options = render_disc_select_options(&active_state, 0, locale);
     let disc_images: HashMap<u32, String> = {
-        let h = load_hakushin_data(&state, locale);
+        let h = load_hakushin_data(&active_state, locale);
         h.discs
             .iter()
             .map(|(id, entry)| {
@@ -670,6 +672,7 @@ pub(crate) async fn equip_generate_submit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
 
     if payload.count == 0 || payload.count > 200 {
@@ -680,11 +683,11 @@ pub(crate) async fn equip_generate_submit(
         return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.slot_range"))).into_response();
     }
 
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
-    let equip_index = load_equip_template_index(&state.asset_dir);
+    let equip_index = load_equip_template_index(&active_state.asset_dir);
     let count_to_gen = payload.count as usize;
     let mut rng = rand::thread_rng();
     let mut ok = 0usize;
@@ -712,7 +715,7 @@ pub(crate) async fn equip_generate_submit(
         };
 
         if let Err(e) = ctl::create_equip(
-            state.active_ctl_addr(&headers),
+            active_state.active_ctl_addr(&headers),
             uid,
             item_id as u16,
             15,
@@ -744,14 +747,15 @@ pub(crate) async fn equip_delete_submit(
         return redirect_to_login(&original_uri.0);
     };
 
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
     let selected: Vec<u32> = parse_selected_equip_uids(&raw_form_text);
 
-    let addr = state.active_ctl_addr(&headers);
+    let addr = active_state.active_ctl_addr(&headers);
     let mut deleted = 0usize;
     for equip_uid in selected {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
@@ -778,17 +782,18 @@ pub(crate) async fn equip_delete_all_unlocked(
         return redirect_to_login(&original_uri.0);
     };
 
+    let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
-    let save = load_player_save(&state, uid);
+    let save = load_player_save(&active_state, uid);
     let uids: Vec<u32> = save
         .iter()
         .flat_map(|s| s.equip.iter().map(|e| e.uid))
         .collect();
 
-    let addr = state.active_ctl_addr(&headers);
+    let addr = active_state.active_ctl_addr(&headers);
     let mut deleted = 0usize;
     for equip_uid in uids {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {

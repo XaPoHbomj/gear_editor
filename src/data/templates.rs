@@ -45,15 +45,15 @@ pub(crate) fn load_equip_template_index(asset_dir: &FsPath) -> EquipTemplateInde
         else {
             continue;
         };
-        let Some(slot) = entry
+        let slot = entry
             .get("equipment_type")
             .and_then(|v| v.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let Some(suit_type) = entry.get("suit_type").and_then(|v| v.parse::<u32>().ok()) else {
-            continue;
-        };
+            .or_else(|| Some(item_id % 10))
+            .unwrap_or(1);
+        let suit_type = entry
+            .get("suit_type")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or_else(|| (item_id / 100) * 100);
         let info = EquipTemplateInfo { suit_type, slot };
         index.by_item.insert(item_id, info);
         index
