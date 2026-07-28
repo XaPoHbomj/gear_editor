@@ -23,6 +23,18 @@ fn write_u64_le(buf: &mut [u8], pos: &mut usize, val: u64) {
     *pos += 8;
 }
 
+fn nak_reason_name(reason: u32) -> &'static str {
+    match reason {
+        1 => "protocol_version_mismatch",
+        2 => "operation_version_mismatch",
+        3 => "unknown_operation_tag",
+        4 => "invalid_parameter",
+        5 => "no_entry (player not online or entity not found)",
+        6 => "no_space_left",
+        _ => "unknown",
+    }
+}
+
 fn send_and_ack(addr: &str, data: &[u8]) -> Result<(), String> {
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("bind: {e}"))?;
     socket
@@ -31,17 +43,22 @@ fn send_and_ack(addr: &str, data: &[u8]) -> Result<(), String> {
     socket
         .send_to(data, addr)
         .map_err(|e| format!("send: {e}"))?;
-    let mut buf = [0u8; 8];
-    let n = socket
+    let mut buf = [0u8; 16];
+    let (n, _src) = socket
         .recv_from(&mut buf)
         .map_err(|e| format!("recv (ack): {e}"))?;
-    if n.0 < 8 {
-        return Err(format!("short response: {} bytes", n.0));
+    if n < 8 {
+        return Err(format!("short response: {} bytes", n));
     }
     let tag = u16::from_le_bytes([buf[2], buf[3]]);
     if tag == 1 {
-        let reason = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
-        return Err(format!("NAK reason={reason}"));
+        if n < 16 {
+            return Err(format!("short NAK response: {} bytes", n));
+        }
+        let reason = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+        let extra = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+        let reason_name = nak_reason_name(reason);
+        return Err(format!("NAK {reason_name} (code={reason}) extra={extra}"));
     }
     if tag != 0 {
         return Err(format!("unexpected event tag={tag}"));
