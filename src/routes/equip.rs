@@ -1,3 +1,4 @@
+use crate::remielle_save::{EquipItemSave, PlayerSave};
 use crate::{
     app_state::AppState,
     auth::{get_session, html_escape_attr, redirect_to_login},
@@ -26,7 +27,6 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use rand::{Rng, seq::SliceRandom};
-use crate::remielle_save::{EquipItemSave, PlayerSave};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -70,11 +70,21 @@ pub(crate) struct GenerateEquipForm {
 const MAX_DISCS: usize = 3000;
 
 fn equip_main_property(equip: &EquipItemSave) -> (u32, u32, u32) {
-    equip.properties.first().map(|p| (p.key, p.base_value, p.add_value)).unwrap_or((0, 0, 0))
+    equip
+        .properties
+        .first()
+        .map(|p| (p.key, p.base_value, p.add_value))
+        .unwrap_or((0, 0, 0))
 }
 
 fn equip_sub_properties(equip: &EquipItemSave) -> Vec<(u32, u32, u32)> {
-    equip.properties.iter().skip(1).take(4).map(|p| (p.key, p.base_value, p.add_value)).collect()
+    equip
+        .properties
+        .iter()
+        .skip(1)
+        .take(4)
+        .map(|p| (p.key, p.base_value, p.add_value))
+        .collect()
 }
 
 fn next_equip_uid(save: &PlayerSave) -> u32 {
@@ -120,8 +130,10 @@ pub(crate) async fn equip_edit(
     };
 
     let state = state.clone();
-    let uid = resolve_player_uid(&state, _session.uid);
     let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&state, _session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
     let Some(save) = load_player_save(&state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
@@ -136,8 +148,8 @@ pub(crate) async fn equip_edit(
     let equip_item_id = equip.id;
     let hakushin = load_hakushin_data(&state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
-    let set_id = equip_set_id(equip_item_id, equip_index);
-    let num_slot = equip_slot(equip_item_id, equip_index);
+    let set_id = equip_set_id(equip_item_id, &equip_index);
+    let num_slot = equip_slot(equip_item_id, &equip_index);
     let equip_name = hakushin
         .discs
         .get(&set_id)
@@ -270,19 +282,36 @@ pub(crate) async fn equip_update(
         return redirect_to_login(&original_uri.0);
     };
 
-    let uid = resolve_player_uid(&state, _session.uid);
+    let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&state, _session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
     let equip_index = load_equip_template_index(&state.asset_dir);
     let save = load_player_save(&state, uid);
 
-    let slot = save.as_ref().and_then(|s| s.equip.iter().find(|e| e.uid == equip_uid)).map(|e| equip_slot(e.id, equip_index)).unwrap_or(1);
+    let slot = save
+        .as_ref()
+        .and_then(|s| s.equip.iter().find(|e| e.uid == equip_uid))
+        .map(|e| equip_slot(e.id, &equip_index))
+        .unwrap_or(1);
     let main_key = normalize_disk_main_stat(slot, payload.main_key)
         .unwrap_or_else(|| disk_main_stat_options(slot).first().copied().unwrap_or(0));
 
     let (keys, base, add) = validate_sub_stats(
         main_key,
-        &[payload.sub_key_1, payload.sub_key_2, payload.sub_key_3, payload.sub_key_4],
-        &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
+        &[
+            payload.sub_key_1,
+            payload.sub_key_2,
+            payload.sub_key_3,
+            payload.sub_key_4,
+        ],
+        &[
+            payload.sub_proc_1,
+            payload.sub_proc_2,
+            payload.sub_proc_3,
+            payload.sub_proc_4,
+        ],
     );
 
     let main_base = disk_main_base_value(main_key).unwrap_or(0);
@@ -292,7 +321,14 @@ pub(crate) async fn equip_update(
         properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
     }
 
-    if let Err(e) = ctl::mod_equip(&state.ctl_addr, uid, equip_uid, payload.level as u8, payload.star as u8, &properties) {
+    if let Err(e) = ctl::mod_equip(
+        state.active_ctl_addr(&headers),
+        uid,
+        equip_uid,
+        payload.level as u8,
+        payload.star as u8,
+        &properties,
+    ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
 
@@ -460,11 +496,13 @@ pub(crate) async fn equip_add(
     };
 
     let locale = locale_from_headers(&headers);
-    let uid = resolve_player_uid(&state, session.uid);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
     let equip_index = load_equip_template_index(&state.asset_dir);
     let Some(item_id) =
-        resolve_equip_item_id(payload.equip_set_id, payload.equip_slot, equip_index)
+        resolve_equip_item_id(payload.equip_set_id, payload.equip_slot, &equip_index)
     else {
         return Html(t(locale, "disc.invalid_set_slot")).into_response();
     };
@@ -481,8 +519,18 @@ pub(crate) async fn equip_add(
 
     let (keys, base, add) = validate_sub_stats(
         main_key,
-        &[payload.sub_key_1, payload.sub_key_2, payload.sub_key_3, payload.sub_key_4],
-        &[payload.sub_proc_1, payload.sub_proc_2, payload.sub_proc_3, payload.sub_proc_4],
+        &[
+            payload.sub_key_1,
+            payload.sub_key_2,
+            payload.sub_key_3,
+            payload.sub_key_4,
+        ],
+        &[
+            payload.sub_proc_1,
+            payload.sub_proc_2,
+            payload.sub_proc_3,
+            payload.sub_proc_4,
+        ],
     );
 
     let mut properties = [(0u16, 0u16, 0u8); 5];
@@ -491,11 +539,24 @@ pub(crate) async fn equip_add(
         properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
     }
 
-    if let Err(e) = ctl::create_equip(&state.ctl_addr, uid, item_id as u16, 15, 1, &properties) {
+    if let Err(e) = ctl::create_equip(
+        state.active_ctl_addr(&headers),
+        uid,
+        item_id as u16,
+        15,
+        1,
+        &properties,
+    ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_add", &format!("set={} slot={}", payload.equip_set_id, payload.equip_slot));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "equip_add",
+        &format!("set={} slot={}", payload.equip_set_id, payload.equip_slot),
+    );
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -619,7 +680,9 @@ pub(crate) async fn equip_generate_submit(
         return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.slot_range"))).into_response();
     }
 
-    let uid = resolve_player_uid(&state, session.uid);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
     let equip_index = load_equip_template_index(&state.asset_dir);
     let count_to_gen = payload.count as usize;
@@ -630,21 +693,44 @@ pub(crate) async fn equip_generate_submit(
         let (item_id, properties_tup) = match generate_random_disc(
             payload.equip_set_id,
             selected_slot,
-            equip_index,
+            &equip_index,
             &mut rng,
             locale,
         ) {
             Ok(value) => value,
-            Err(message) => return (StatusCode::BAD_REQUEST, Html(render_error_page(t(locale, "disc.failed_create_gen"), &message, locale))).into_response(),
+            Err(message) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Html(render_error_page(
+                        t(locale, "disc.failed_create_gen"),
+                        &message,
+                        locale,
+                    )),
+                )
+                    .into_response();
+            }
         };
 
-        if let Err(e) = ctl::create_equip(&state.ctl_addr, uid, item_id as u16, 15, 1, &properties_tup) {
+        if let Err(e) = ctl::create_equip(
+            state.active_ctl_addr(&headers),
+            uid,
+            item_id as u16,
+            15,
+            1,
+            &properties_tup,
+        ) {
             return Html(format!("ctl error (generate): {e}")).into_response();
         }
         ok += 1;
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_generate", &format!("generated {} discs", ok));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "equip_generate",
+        &format!("generated {} discs", ok),
+    );
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -658,11 +744,14 @@ pub(crate) async fn equip_delete_submit(
         return redirect_to_login(&original_uri.0);
     };
 
-    let uid = resolve_player_uid(&state, session.uid);
+    let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
     let selected: Vec<u32> = parse_selected_equip_uids(&raw_form_text);
 
-    let addr = &state.ctl_addr;
+    let addr = state.active_ctl_addr(&headers);
     let mut deleted = 0usize;
     for equip_uid in selected {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
@@ -670,7 +759,13 @@ pub(crate) async fn equip_delete_submit(
         }
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete", &format!("deleted {} discs", deleted));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "equip_delete",
+        &format!("deleted {} discs", deleted),
+    );
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -683,11 +778,17 @@ pub(crate) async fn equip_delete_all_unlocked(
         return redirect_to_login(&original_uri.0);
     };
 
-    let uid = resolve_player_uid(&state, session.uid);
+    let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
     let save = load_player_save(&state, uid);
-    let uids: Vec<u32> = save.iter().flat_map(|s| s.equip.iter().map(|e| e.uid)).collect();
+    let uids: Vec<u32> = save
+        .iter()
+        .flat_map(|s| s.equip.iter().map(|e| e.uid))
+        .collect();
 
-    let addr = &state.ctl_addr;
+    let addr = state.active_ctl_addr(&headers);
     let mut deleted = 0usize;
     for equip_uid in uids {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
@@ -695,7 +796,13 @@ pub(crate) async fn equip_delete_all_unlocked(
         }
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "equip_delete_all_unlocked", &format!("deleted {} discs", deleted));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "equip_delete_all_unlocked",
+        &format!("deleted {} discs", deleted),
+    );
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
@@ -836,7 +943,7 @@ pub(crate) fn render_equip_cards(
     let mut cards_data = Vec::new();
     for equip in save.iter().flat_map(|s| s.equip.iter()) {
         let equip_item_id = equip.id;
-        let set_id = equip_set_id(equip_item_id, equip_index);
+        let set_id = equip_set_id(equip_item_id, &equip_index);
         let level = equip.level;
 
         let name = hakushin
@@ -847,7 +954,7 @@ pub(crate) fn render_equip_cards(
             .unwrap_or_else(|| format!("{fallback_disc} {equip_item_id}"));
 
         let main_stat = equip_main_property(equip);
-        let slot = equip_slot(equip_item_id, equip_index);
+        let slot = equip_slot(equip_item_id, &equip_index);
 
         let img = hakushin
             .discs
@@ -863,9 +970,7 @@ pub(crate) fn render_equip_cards(
         } else {
             sub_stats
                 .iter()
-                .map(|(key, _, procs)| {
-                    format!("{} x{}", stat_label(state, locale, *key), procs)
-                })
+                .map(|(key, _, procs)| format!("{} x{}", stat_label(state, locale, *key), procs))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -893,7 +998,14 @@ pub(crate) fn render_equip_cards(
                 img = html_escape_attr(&img)
             )
         };
-        cards_data.push((equip_item_id, equip.uid, card_html, set_id, slot, main_stat.0));
+        cards_data.push((
+            equip_item_id,
+            equip.uid,
+            card_html,
+            set_id,
+            slot,
+            main_stat.0,
+        ));
     }
 
     cards_data.retain(|(_, _, _, set_id, slot, main_stat_key)| {
@@ -919,7 +1031,11 @@ pub(crate) fn render_equip_cards(
     let total = cards_data.len();
 
     let per_page: usize = 50;
-    let total_pages = if total == 0 { 1 } else { (total + per_page - 1) / per_page };
+    let total_pages = if total == 0 {
+        1
+    } else {
+        (total + per_page - 1) / per_page
+    };
     let page = page.clamp(1, total_pages as u32);
     let start = ((page - 1) as usize) * per_page;
     let end = total.min(start + per_page);
@@ -930,8 +1046,30 @@ pub(crate) fn render_equip_cards(
         cards.push_str(&card_html);
     }
 
-    let filter_panel = render_disc_filter_panel(state, locale, filter_set_id, filter_slot, filter_main_stat, _filter_status, delete_mode);
-    let pagination_html = if total_pages > 1 { render_pagination(locale, page, total_pages as u32, filter_set_id, filter_slot, filter_main_stat, _filter_status, total, delete_mode) } else { String::new() };
+    let filter_panel = render_disc_filter_panel(
+        state,
+        locale,
+        filter_set_id,
+        filter_slot,
+        filter_main_stat,
+        _filter_status,
+        delete_mode,
+    );
+    let pagination_html = if total_pages > 1 {
+        render_pagination(
+            locale,
+            page,
+            total_pages as u32,
+            filter_set_id,
+            filter_slot,
+            filter_main_stat,
+            _filter_status,
+            total,
+            delete_mode,
+        )
+    } else {
+        String::new()
+    };
 
     if cards.is_empty() && total == 0 {
         cards.push_str(&format!(
@@ -960,11 +1098,7 @@ pub(crate) fn render_equip_cards(
     }
 }
 
-fn render_add_equip_panel(
-    state: &AppState,
-    delete_mode: bool,
-    locale: Locale,
-) -> String {
+fn render_add_equip_panel(state: &AppState, delete_mode: bool, locale: Locale) -> String {
     let _ = state;
     let title = t(locale, "disc.title");
     let new_disc = t(locale, "disc.new_disc");
@@ -1061,30 +1195,63 @@ fn render_disc_filter_panel(
             .map(|(id, entry)| (*id, entry.name.clone()))
             .collect();
         items.sort_by(|a, b| a.1.cmp(&b.1));
-        let mut html = format!("<option value=\"\">{}</option>", t(locale, "disc.filter_all"));
+        let mut html = format!(
+            "<option value=\"\">{}</option>",
+            t(locale, "disc.filter_all")
+        );
         for (id, name) in items {
-            let sel = if filter_set_id == Some(id) { " selected" } else { "" };
-            html.push_str(&format!("<option value=\"{}\"{}>{}</option>", id, sel, name));
+            let sel = if filter_set_id == Some(id) {
+                " selected"
+            } else {
+                ""
+            };
+            html.push_str(&format!(
+                "<option value=\"{}\"{}>{}</option>",
+                id, sel, name
+            ));
         }
         html
     };
 
     let slot_opts = {
-        let mut html = format!("<option value=\"\">{}</option>", t(locale, "disc.filter_all"));
+        let mut html = format!(
+            "<option value=\"\">{}</option>",
+            t(locale, "disc.filter_all")
+        );
         for s in 1..=6 {
-            let sel = if filter_slot == Some(s) { " selected" } else { "" };
-            html.push_str(&format!("<option value=\"{}\"{}>{} {}</option>", s, sel, t(locale, "slot"), s));
+            let sel = if filter_slot == Some(s) {
+                " selected"
+            } else {
+                ""
+            };
+            html.push_str(&format!(
+                "<option value=\"{}\"{}>{} {}</option>",
+                s,
+                sel,
+                t(locale, "slot"),
+                s
+            ));
         }
         html
     };
 
     let main_stat_opts = {
-        let mut html = format!("<option value=\"\">{}</option>", t(locale, "disc.filter_all"));
+        let mut html = format!(
+            "<option value=\"\">{}</option>",
+            t(locale, "disc.filter_all")
+        );
         let all_keys = all_main_stat_keys();
         for &key in all_keys {
             let label = stat_label(state, locale, key);
-            let sel = if filter_main_stat == Some(key) { " selected" } else { "" };
-            html.push_str(&format!("<option value=\"{}\"{}>{}</option>", key, sel, label));
+            let sel = if filter_main_stat == Some(key) {
+                " selected"
+            } else {
+                ""
+            };
+            html.push_str(&format!(
+                "<option value=\"{}\"{}>{}</option>",
+                key, sel, label
+            ));
         }
         html
     };
@@ -1191,7 +1358,9 @@ fn render_pagination(
     let prev_link = if page > 1 {
         format!(
             "<a href=\"/dashboard?{}&page={}\" style=\"padding:6px 12px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;\">{}</a>",
-            filter_params, page - 1, prev_label,
+            filter_params,
+            page - 1,
+            prev_label,
         )
     } else {
         format!(
@@ -1203,7 +1372,9 @@ fn render_pagination(
     let next_link = if page < total_pages {
         format!(
             "<a href=\"/dashboard?{}&page={}\" style=\"padding:6px 12px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;\">{}</a>",
-            filter_params, page + 1, next_label,
+            filter_params,
+            page + 1,
+            next_label,
         )
     } else {
         format!(

@@ -51,12 +51,24 @@ pub(crate) async fn admin_update_hadal_zone(
         _ => return Html("Invalid hadal_id").into_response(),
     };
 
-    let addr = ctl::ctl_addr_for_server(payload.server);
+    let addr = match ctl::ctl_addr_for_server(state.active_ctl_addr(&headers), payload.server) {
+        Ok(addr) => addr,
+        Err(e) => return Html(format!("ctl address error: {e}")).into_response(),
+    };
     if let Err(e) = ctl::mod_hadal_entrance(&addr, entrance_id, payload.new_zone) {
         return Html(format!("ctl error: {e}")).into_response();
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "update_hadal_zone", &format!("server={} {} -> {}", payload.server, payload.hadal_id, payload.new_zone));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "update_hadal_zone",
+        &format!(
+            "server={} {} -> {}",
+            payload.server, payload.hadal_id, payload.new_zone
+        ),
+    );
 
     let locale = locale_from_headers(&headers);
     Redirect::to(&format!("/dashboard?tab=status")).into_response()
@@ -131,9 +143,7 @@ pub(crate) async fn admin_upload_update(
         while let Some(bytes) = stream.next().await {
             match bytes {
                 Ok(chunk) => {
-                    if let Err(e) =
-                        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await
-                    {
+                    if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await {
                         let _ = tokio::fs::remove_file(&dest).await;
                         return Html(format!("Failed to write file: {}", e)).into_response();
                     }
@@ -159,7 +169,13 @@ pub(crate) async fn admin_upload_update(
         return Html(t(locale, "updates.upload_no_file")).into_response();
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "upload_update", &format!("uploaded {}", saved_name));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "upload_update",
+        &format!("uploaded {}", saved_name),
+    );
 
     Redirect::to("/dashboard?tab=updates").into_response()
 }

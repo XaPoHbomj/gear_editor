@@ -164,11 +164,35 @@ fn decode_basic_save(buf: &[u8]) -> BasicSave {
         pos = new_pos;
         let field = tag >> 3;
         match field {
-            1 => { if let Some((v, np)) = read_varint(buf, pos) { basic.level = v as u32; pos = np; } }
-            2 => { if let Some((v, np)) = read_varint(buf, pos) { basic.avatar_id = v as u32; pos = np; } }
-            3 => { if let Some((v, np)) = read_varint(buf, pos) { basic.control_avatar_id = v as u32; pos = np; } }
-            4 => { if let Some((v, np)) = read_varint(buf, pos) { basic.control_guise_avatar_id = v as u32; pos = np; } }
-            _ => { if !skip_field(tag & 7, buf, &mut pos) { break; } }
+            1 => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    basic.level = v as u32;
+                    pos = np;
+                }
+            }
+            2 => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    basic.avatar_id = v as u32;
+                    pos = np;
+                }
+            }
+            3 => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    basic.control_avatar_id = v as u32;
+                    pos = np;
+                }
+            }
+            4 => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    basic.control_guise_avatar_id = v as u32;
+                    pos = np;
+                }
+            }
+            _ => {
+                if !skip_field(tag & 7, buf, &mut pos) {
+                    break;
+                }
+            }
         }
     }
     basic
@@ -192,30 +216,99 @@ fn decode_avatar_save(buf: &[u8]) -> AvatarItemSave {
         let field = tag >> 3;
         let wire = tag & 7;
         match (field, wire) {
-            (1, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.id = v as u32; pos = np; } }
-            (2, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.level = v as u32; pos = np; } }
-            (3, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.exp = v as u32; pos = np; } }
-            (4, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.rank = v as u32; pos = np; } }
-            (5, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.talents = v as u32; pos = np; } }
-            (6, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.talent_switch = v as u32; pos = np; } }
-            (7, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.favorite = v != 0; pos = np; } }
+            (1, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.id = v as u32;
+                    pos = np;
+                }
+            }
+            (2, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.level = v as u32;
+                    pos = np;
+                }
+            }
+            (3, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.exp = v as u32;
+                    pos = np;
+                }
+            }
+            (4, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.rank = v as u32;
+                    pos = np;
+                }
+            }
+            (5, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.talents = v as u32;
+                    pos = np;
+                }
+            }
+            (6, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.talent_switch = v as u32;
+                    pos = np;
+                }
+            }
+            (7, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.favorite = v != 0;
+                    pos = np;
+                }
+            }
             (8, 2) => {
                 let (sub, np) = read_ld(buf, pos).unwrap_or((&[], buf.len()));
                 pos = np;
                 item.skill_levels = decode_varint_list(sub);
             }
-            (9, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.skin_id = v as u32; pos = np; } }
-            (10, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.weapon_uid = v as u32; pos = np; } }
+            (9, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.skin_id = v as u32;
+                    pos = np;
+                }
+            }
+            (10, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.weapon_uid = v as u32;
+                    pos = np;
+                }
+            }
             (11, 2) => {
                 let (sub, np) = read_ld(buf, pos).unwrap_or((&[], buf.len()));
                 pos = np;
                 item.equipment_uids = decode_varint_list(sub);
             }
-            (12, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.awake_available = v != 0; pos = np; } }
-            (13, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.awake_enabled = v != 0; pos = np; } }
-            (14, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.awake_id = v as u32; pos = np; } }
-            (15, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.awake_material_count = v as u32; pos = np; } }
-            _ => { if !skip_field(wire, buf, &mut pos) { break; } }
+            (12, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.awake_available = v != 0;
+                    pos = np;
+                }
+            }
+            (13, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.awake_enabled = v != 0;
+                    pos = np;
+                }
+            }
+            (14, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.awake_id = v as u32;
+                    pos = np;
+                }
+            }
+            (15, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.awake_material_count = v as u32;
+                    pos = np;
+                }
+            }
+            _ => {
+                if !skip_field(wire, buf, &mut pos) {
+                    break;
+                }
+            }
         }
     }
     item
@@ -231,13 +324,21 @@ fn encode_avatar_save(item: &AvatarItemSave) -> Vec<u8> {
     encode_varint_field(&mut buf, 6, item.talent_switch as u64);
     encode_varint_field(&mut buf, 7, item.favorite as u64);
     if !item.skill_levels.is_empty() {
-        let sk_buf: Vec<u8> = item.skill_levels.iter().flat_map(|v| encode_varint(*v as u64)).collect();
+        let sk_buf: Vec<u8> = item
+            .skill_levels
+            .iter()
+            .flat_map(|v| encode_varint(*v as u64))
+            .collect();
         encode_ld(&mut buf, 8, &sk_buf);
     }
     encode_varint_field(&mut buf, 9, item.skin_id as u64);
     encode_varint_field(&mut buf, 10, item.weapon_uid as u64);
     if !item.equipment_uids.is_empty() {
-        let eq_buf: Vec<u8> = item.equipment_uids.iter().flat_map(|v| encode_varint(*v as u64)).collect();
+        let eq_buf: Vec<u8> = item
+            .equipment_uids
+            .iter()
+            .flat_map(|v| encode_varint(*v as u64))
+            .collect();
         encode_ld(&mut buf, 11, &eq_buf);
     }
     encode_varint_field(&mut buf, 12, item.awake_available as u64);
@@ -299,7 +400,11 @@ fn decode_weapon_save(buf: &[u8]) -> WeaponItemSave {
                     }
                 }
             }
-            _ => { if !skip_field(tag & 7, buf, &mut pos) { break; } }
+            _ => {
+                if !skip_field(tag & 7, buf, &mut pos) {
+                    break;
+                }
+            }
         }
     }
     item
@@ -365,7 +470,11 @@ fn decode_equip_property(buf: &[u8]) -> EquipProperty {
                     }
                 }
             }
-            _ => { if !skip_field(tag & 7, buf, &mut pos) { break; } }
+            _ => {
+                if !skip_field(tag & 7, buf, &mut pos) {
+                    break;
+                }
+            }
         }
     }
     prop
@@ -388,16 +497,40 @@ fn decode_equip_save(buf: &[u8]) -> EquipItemSave {
         let field = tag >> 3;
         let wire = tag & 7;
         match (field, wire) {
-            (1, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.uid = v as u32; pos = np; } }
-            (2, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.id = v as u32; pos = np; } }
-            (3, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.level = v as u32; pos = np; } }
-            (4, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.star = v as u32; pos = np; } }
+            (1, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.uid = v as u32;
+                    pos = np;
+                }
+            }
+            (2, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.id = v as u32;
+                    pos = np;
+                }
+            }
+            (3, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.level = v as u32;
+                    pos = np;
+                }
+            }
+            (4, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.star = v as u32;
+                    pos = np;
+                }
+            }
             (5, 2) => {
                 let (sub, np) = read_ld(buf, pos).unwrap_or((&[], buf.len()));
                 pos = np;
                 item.properties = decode_equip_properties_list(sub);
             }
-            _ => { if !skip_field(wire, buf, &mut pos) { break; } }
+            _ => {
+                if !skip_field(wire, buf, &mut pos) {
+                    break;
+                }
+            }
         }
     }
     item
@@ -487,18 +620,52 @@ fn decode_buddy_save(buf: &[u8]) -> BuddyItemSave {
         let field = tag >> 3;
         let wire = tag & 7;
         match (field, wire) {
-            (1, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.id = v as u32; pos = np; } }
-            (2, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.level = v as u32; pos = np; } }
-            (3, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.exp = v as u32; pos = np; } }
-            (4, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.rank = v as u32; pos = np; } }
-            (5, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.star = v as u32; pos = np; } }
-            (6, 0) => { if let Some((v, np)) = read_varint(buf, pos) { item.favorite = v != 0; pos = np; } }
+            (1, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.id = v as u32;
+                    pos = np;
+                }
+            }
+            (2, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.level = v as u32;
+                    pos = np;
+                }
+            }
+            (3, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.exp = v as u32;
+                    pos = np;
+                }
+            }
+            (4, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.rank = v as u32;
+                    pos = np;
+                }
+            }
+            (5, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.star = v as u32;
+                    pos = np;
+                }
+            }
+            (6, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.favorite = v != 0;
+                    pos = np;
+                }
+            }
             (7, 2) => {
                 let (sub, np) = read_ld(buf, pos).unwrap_or((&[], buf.len()));
                 pos = np;
                 item.skill_levels = decode_varint_list(sub);
             }
-            _ => { if !skip_field(wire, buf, &mut pos) { break; } }
+            _ => {
+                if !skip_field(wire, buf, &mut pos) {
+                    break;
+                }
+            }
         }
     }
     item
@@ -513,7 +680,11 @@ fn encode_buddy_save(item: &BuddyItemSave) -> Vec<u8> {
     encode_varint_field(&mut buf, 5, item.star as u64);
     encode_varint_field(&mut buf, 6, item.favorite as u64);
     if !item.skill_levels.is_empty() {
-        let sk_buf: Vec<u8> = item.skill_levels.iter().flat_map(|v| encode_varint(*v as u64)).collect();
+        let sk_buf: Vec<u8> = item
+            .skill_levels
+            .iter()
+            .flat_map(|v| encode_varint(*v as u64))
+            .collect();
         encode_ld(&mut buf, 7, &sk_buf);
     }
     buf
@@ -563,7 +734,9 @@ fn decode_hall_save(buf: &[u8]) -> HallSave {
                 pos = np;
             }
         } else {
-            if !skip_field(tag & 7, buf, &mut pos) { break; }
+            if !skip_field(tag & 7, buf, &mut pos) {
+                break;
+            }
         }
     }
     hall
@@ -580,7 +753,9 @@ fn read_varint(buf: &[u8], pos: usize) -> Option<(u64, usize)> {
     let mut shift = 0;
     let mut p = pos;
     loop {
-        if p >= buf.len() { return None; }
+        if p >= buf.len() {
+            return None;
+        }
         let byte = buf[p];
         p += 1;
         result |= ((byte & 0x7f) as u64) << shift;
@@ -595,7 +770,9 @@ fn read_varint(buf: &[u8], pos: usize) -> Option<(u64, usize)> {
 fn read_ld<'a>(buf: &'a [u8], pos: usize) -> Option<(&'a [u8], usize)> {
     let (len, np) = read_varint(buf, pos)?;
     let end = np + len as usize;
-    if end > buf.len() { return None; }
+    if end > buf.len() {
+        return None;
+    }
     Some((&buf[np..end], end))
 }
 

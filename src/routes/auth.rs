@@ -1,5 +1,6 @@
 use crate::{
     AppState,
+    app_state::{ServerMode, parse_server_mode},
     auth::{
         get_session, html_escape_attr, html_escape_text, insert_session, redirect_to_login,
         remove_session, sanitize_next_path, set_session, url_encode_component, validate_login,
@@ -25,6 +26,12 @@ pub(crate) struct LoginForm {
 pub(crate) struct LoginQuery {
     next: Option<String>,
     error: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SwitchServerQuery {
+    target: Option<String>,
+    next: Option<String>,
 }
 
 pub(crate) async fn login_page(
@@ -115,20 +122,17 @@ pub(crate) async fn login(
             let uid = session.uid;
             let session_id = insert_session(session);
 
-            audit_log(
-                &state.root_dir,
-                &username,
-                uid,
-                "login",
-                "successful login",
-            );
+            audit_log(&state.root_dir, &username, uid, "login", "successful login");
 
             let mut headers = HeaderMap::new();
             headers.insert(
                 header::SET_COOKIE,
-                format!("ge_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000", session_id)
-                    .parse()
-                    .unwrap(),
+                format!(
+                    "ge_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000",
+                    session_id
+                )
+                .parse()
+                .unwrap(),
             );
 
             let next = payload
@@ -169,10 +173,40 @@ pub(crate) async fn login(
     response
 }
 
-pub(crate) async fn logout(
-    State(state): State<AppState>,
+pub(crate) async fn switch_server(
     headers: HeaderMap,
+    original_uri: OriginalUri,
+    Query(query): Query<SwitchServerQuery>,
 ) -> impl IntoResponse {
+    let Some((session_id, mut session)) = get_session(&headers) else {
+        return redirect_to_login(&original_uri.0);
+    };
+
+    let mode = parse_server_mode(query.target.as_deref().unwrap_or("beta"));
+    let next = query
+        .next
+        .as_deref()
+        .and_then(sanitize_next_path)
+        .unwrap_or_else(|| "/dashboard".to_string());
+
+    session.pending_writes.clear();
+    set_session(session_id, session);
+
+    let mut response = Redirect::to(&next).into_response();
+    let value = match mode {
+        ServerMode::Beta => "gear_server=beta; Path=/; SameSite=Lax",
+        ServerMode::Prod => "gear_server=prod; Path=/; SameSite=Lax",
+    };
+    if let Ok(header_value) = HeaderValue::from_str(value) {
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, header_value);
+    }
+
+    response
+}
+
+pub(crate) async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let mut response = Redirect::to("/").into_response();
 
     if let Some((session_id, session)) = get_session(&headers) {

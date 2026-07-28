@@ -67,7 +67,46 @@ pub(crate) fn locale_from_headers(headers: &HeaderMap) -> Locale {
             return locale;
         }
     }
+    if let Some(value) = headers.get(axum::http::header::ACCEPT_LANGUAGE) {
+        if let Ok(value) = value.to_str() {
+            return locale_from_accept_language(value);
+        }
+    }
     Locale::En
+}
+
+fn locale_from_accept_language(header: &str) -> Locale {
+    header
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            let (range, quality) = if let Some((range, q)) = entry.split_once(';') {
+                let range = range.trim();
+                let q = q.trim();
+                let q_value: f64 = q
+                    .strip_prefix("q=")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1.0);
+                (range, q_value)
+            } else {
+                (entry, 1.0)
+            };
+            if quality <= 0.0 {
+                return None;
+            }
+            let locale = match range {
+                r if r.starts_with("en") => Locale::En,
+                r if r.starts_with("ru") => Locale::Ru,
+                r if r.starts_with("zh") => Locale::Zh,
+                r if r.starts_with("ko") => Locale::Ko,
+                r if r.starts_with("ja") => Locale::Ja,
+                _ => return None,
+            };
+            Some((locale, quality))
+        })
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(locale, _)| locale)
+        .unwrap_or(Locale::En)
 }
 
 pub(crate) fn t(locale: Locale, key: &str) -> &str {
@@ -86,11 +125,11 @@ fn t_en(key: &str) -> &str {
         "nav.characters" => "Characters",
         "nav.weapons" => "Weapons",
         "nav.discs" => "Discs",
-        "nav.bangboos" => "Bangboos",
         "nav.deadly_assault" => "Deadly Assault",
         "nav.shiyu" => "Shiyu",
         "nav.client_updates" => "Client Updates",
         "nav.status" => "DA/Shiyu Status",
+        "player.not_found" => "Player data not found",
         "header.signed_in_as" => "Signed in as",
         "header.apply_changes" => "Apply changes",
         "header.beta" => "Beta",
@@ -114,7 +153,6 @@ fn t_en(key: &str) -> &str {
         "avatar.no_characters" => "No characters found for this account.",
         "avatar.save" => "Save (pending)",
         "avatar.id" => "ID",
-        "avatar.add_all" => "Add all agents",
         "avatar.level_n" => "Level",
         "skill.basic_attack" => "Basic attack",
         "skill.special_attack" => "Special attack",
@@ -218,15 +256,6 @@ fn t_en(key: &str) -> &str {
         "disc.prev" => "Prev",
         "disc.next" => "Next",
         "disc.showing" => "Showing",
-        "bangboo.edit" => "Edit Bangboo",
-        "bangboo.back" => "Back to Bangboos",
-        "bangboo.level" => "Level",
-        "bangboo.rank" => "Rank",
-        "bangboo.skill_levels" => "Skill levels",
-        "bangboo.save" => "Save (pending)",
-        "bangboo.not_found" => "Bangboo not found",
-        "bangboo.no_bangboos" => "No bangboos found for this account.",
-        "bangboo.add_all" => "Add all bangboos",
         "element.ice" => "Ice",
         "element.fire" => "Fire",
         "element.electric" => "Electric",
@@ -315,7 +344,6 @@ fn t_en(key: &str) -> &str {
         "fallback.avatar" => "Avatar",
         "fallback.weapon" => "Weapon",
         "fallback.disc" => "Disc",
-        "fallback.bangboo" => "Bangboo",
         "fallback.unknown" => "Unknown",
         "empty" => "Empty",
         "none" => "None",
@@ -332,11 +360,11 @@ fn t_ru(key: &str) -> &str {
         "nav.characters" => "Персонажи",
         "nav.weapons" => "Оружие",
         "nav.discs" => "Диски",
-        "nav.bangboos" => "Банбу",
         "nav.deadly_assault" => "Смертельный штурм",
         "nav.shiyu" => "Шиюй",
         "nav.client_updates" => "Обновления",
         "nav.status" => "Штурм/Шиюй Статус",
+        "player.not_found" => "Данные игрока не найдены",
         "header.signed_in_as" => "Вы вошли как",
         "header.apply_changes" => "Применить",
         "header.beta" => "Бета",
@@ -360,7 +388,6 @@ fn t_ru(key: &str) -> &str {
         "avatar.no_characters" => "Для этой учётной записи персонажи не найдены.",
         "avatar.save" => "Сохранить изменения",
         "avatar.id" => "ID",
-        "avatar.add_all" => "Добавить всех агентов",
         "avatar.level_n" => "Уровень",
         "skill.basic_attack" => "Базовая атака",
         "skill.special_attack" => "Особая атака",
@@ -464,15 +491,6 @@ fn t_ru(key: &str) -> &str {
         "disc.prev" => "Пред.",
         "disc.next" => "След.",
         "disc.showing" => "Показано",
-        "bangboo.edit" => "Редактировать банбу",
-        "bangboo.back" => "Назад к банбу",
-        "bangboo.level" => "Уровень",
-        "bangboo.rank" => "Ранг",
-        "bangboo.skill_levels" => "Уровни навыков",
-        "bangboo.save" => "Сохранить изменения",
-        "bangboo.not_found" => "Банбу не найден",
-        "bangboo.no_bangboos" => "Для этой учётной записи банбу не найдены.",
-        "bangboo.add_all" => "Добавить всех банбу",
         "element.ice" => "Лёд",
         "element.fire" => "Огонь",
         "element.electric" => "Электричество",
@@ -561,7 +579,6 @@ fn t_ru(key: &str) -> &str {
         "fallback.avatar" => "Персонаж",
         "fallback.weapon" => "Оружие",
         "fallback.disc" => "Диск",
-        "fallback.bangboo" => "Банбу",
         "fallback.unknown" => "Неизвестно",
         "empty" => "Пусто",
         "none" => "Нет",
@@ -578,11 +595,11 @@ fn t_zh(key: &str) -> &str {
         "nav.characters" => "角色",
         "nav.weapons" => "武器",
         "nav.discs" => "驱动盘",
-        "nav.bangboos" => "邦布",
         "nav.deadly_assault" => "危局强袭",
         "nav.shiyu" => "式舆防卫战",
         "nav.client_updates" => "客户端更新",
         "nav.status" => "DA/Shiyu 状态",
+        "player.not_found" => "未找到玩家数据",
         "header.signed_in_as" => "已登录",
         "header.apply_changes" => "应用更改",
         "header.beta" => "Beta",
@@ -606,7 +623,6 @@ fn t_zh(key: &str) -> &str {
         "avatar.no_characters" => "此账号未找到角色。",
         "avatar.save" => "保存（待定）",
         "avatar.id" => "ID",
-        "avatar.add_all" => "添加所有代理",
         "avatar.level_n" => "等级",
         "skill.basic_attack" => "普通攻击",
         "skill.special_attack" => "特殊技",
@@ -710,15 +726,6 @@ fn t_zh(key: &str) -> &str {
         "disc.prev" => "上一页",
         "disc.next" => "下一页",
         "disc.showing" => "显示",
-        "bangboo.edit" => "编辑邦布",
-        "bangboo.back" => "返回邦布",
-        "bangboo.level" => "等级",
-        "bangboo.rank" => "星级",
-        "bangboo.skill_levels" => "技能等级",
-        "bangboo.save" => "保存（待定）",
-        "bangboo.not_found" => "未找到邦布",
-        "bangboo.no_bangboos" => "此账号未找到邦布。",
-        "bangboo.add_all" => "添加所有邦布",
         "element.ice" => "冰",
         "element.fire" => "火",
         "element.electric" => "电",
@@ -807,7 +814,6 @@ fn t_zh(key: &str) -> &str {
         "fallback.avatar" => "角色",
         "fallback.weapon" => "武器",
         "fallback.disc" => "驱动盘",
-        "fallback.bangboo" => "邦布",
         "fallback.unknown" => "未知",
         "empty" => "空",
         "none" => "无",
@@ -824,11 +830,11 @@ fn t_ko(key: &str) -> &str {
         "nav.characters" => "캐릭터",
         "nav.weapons" => "무기",
         "nav.discs" => "디스크",
-        "nav.bangboos" => "뱅부",
         "nav.deadly_assault" => "데들리 어썰트",
         "nav.shiyu" => "시유 방어전",
         "nav.client_updates" => "클라이언트 업데이트",
         "nav.status" => "DA/Shiyu 상태",
+        "player.not_found" => "플레이어 데이터를 찾을 수 없습니다",
         "header.signed_in_as" => "로그인:",
         "header.apply_changes" => "변경사항 적용",
         "header.beta" => "Beta",
@@ -852,7 +858,6 @@ fn t_ko(key: &str) -> &str {
         "avatar.no_characters" => "이 계정에 캐릭터가 없습니다.",
         "avatar.save" => "저장 (대기)",
         "avatar.id" => "ID",
-        "avatar.add_all" => "모든 에이전트 추가",
         "avatar.level_n" => "레벨",
         "skill.basic_attack" => "일반 공격",
         "skill.special_attack" => "특수 스킬",
@@ -956,15 +961,6 @@ fn t_ko(key: &str) -> &str {
         "disc.prev" => "이전",
         "disc.next" => "다음",
         "disc.showing" => "표시",
-        "bangboo.edit" => "뱅부 편집",
-        "bangboo.back" => "뱅부로 돌아가기",
-        "bangboo.level" => "레벨",
-        "bangboo.rank" => "등급",
-        "bangboo.skill_levels" => "스킬 레벨",
-        "bangboo.save" => "저장 (대기)",
-        "bangboo.not_found" => "뱅부를 찾을 수 없습니다",
-        "bangboo.no_bangboos" => "이 계정에 뱅부가 없습니다.",
-        "bangboo.add_all" => "모든 뱅부 추가",
         "element.ice" => "얼음",
         "element.fire" => "불",
         "element.electric" => "전기",
@@ -1053,7 +1049,6 @@ fn t_ko(key: &str) -> &str {
         "fallback.avatar" => "캐릭터",
         "fallback.weapon" => "무기",
         "fallback.disc" => "디스크",
-        "fallback.bangboo" => "뱅부",
         "fallback.unknown" => "알 수 없음",
         "empty" => "비어 있음",
         "none" => "없음",
@@ -1070,11 +1065,11 @@ fn t_ja(key: &str) -> &str {
         "nav.characters" => "キャラクター",
         "nav.weapons" => "武器",
         "nav.discs" => "ディスク",
-        "nav.bangboos" => "ボンプ",
         "nav.deadly_assault" => "デッドリーアサルト",
         "nav.shiyu" => "式輿防衛戦",
         "nav.client_updates" => "クライアント更新",
         "nav.status" => "DA/Shiyu 状態",
+        "player.not_found" => "プレイヤーデータが見つかりません",
         "header.signed_in_as" => "ログイン:",
         "header.apply_changes" => "変更を適用",
         "header.beta" => "Beta",
@@ -1098,7 +1093,6 @@ fn t_ja(key: &str) -> &str {
         "avatar.no_characters" => "このアカウントにキャラクターがありません。",
         "avatar.save" => "保存（保留中）",
         "avatar.id" => "ID",
-        "avatar.add_all" => "全エージェントを追加",
         "avatar.level_n" => "レベル",
         "skill.basic_attack" => "通常攻撃",
         "skill.special_attack" => "特殊スキル",
@@ -1202,15 +1196,6 @@ fn t_ja(key: &str) -> &str {
         "disc.prev" => "前へ",
         "disc.next" => "次へ",
         "disc.showing" => "表示",
-        "bangboo.edit" => "ボンプ編集",
-        "bangboo.back" => "ボンプに戻る",
-        "bangboo.level" => "レベル",
-        "bangboo.rank" => "ランク",
-        "bangboo.skill_levels" => "スキルレベル",
-        "bangboo.save" => "保存（保留中）",
-        "bangboo.not_found" => "ボンプが見つかりません",
-        "bangboo.no_bangboos" => "このアカウントにボンプがありません。",
-        "bangboo.add_all" => "全ボンプを追加",
         "element.ice" => "氷",
         "element.fire" => "炎",
         "element.electric" => "雷",
@@ -1299,7 +1284,6 @@ fn t_ja(key: &str) -> &str {
         "fallback.avatar" => "キャラクター",
         "fallback.weapon" => "武器",
         "fallback.disc" => "ディスク",
-        "fallback.bangboo" => "ボンプ",
         "fallback.unknown" => "不明",
         "empty" => "空",
         "none" => "なし",

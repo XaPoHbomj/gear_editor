@@ -206,6 +206,17 @@ pub fn mod_hadal_entrance(addr: &str, entrance_id: u32, zone_id: u32) -> Result<
     send_and_ack(addr, &buf[..p])
 }
 
-pub fn ctl_addr_for_server(server_num: u32) -> String {
-    format!("127.0.0.1:{}", 15810 + server_num)
+pub fn ctl_addr_for_server(base_addr: &str, server_num: u32) -> Result<String, String> {
+    let (host, port_str) = base_addr
+        .rsplit_once(':')
+        .ok_or_else(|| "no port in address".to_string())?;
+    let host = host.to_string();
+    let port: u32 = port_str.parse().map_err(|_| "invalid port".to_string())?;
+    let base_port = port
+        .checked_sub(1)
+        .ok_or_else(|| "port underflow".to_string())?;
+    let new_port = base_port
+        .checked_add(server_num)
+        .ok_or_else(|| "port overflow".to_string())?;
+    Ok(format!("{}:{}", host, new_port))
 }

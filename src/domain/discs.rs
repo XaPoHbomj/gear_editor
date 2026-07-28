@@ -3,19 +3,23 @@ use crate::{
     i18n::{Locale, t},
 };
 use serde_json::Value as JsonValue;
-use std::{collections::HashMap, fs, sync::Mutex};
+use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex};
 
-static STAT_NAMES_CACHE: std::sync::LazyLock<Mutex<HashMap<String, HashMap<u32, String>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static STAT_NAMES_CACHE: std::sync::LazyLock<
+    Mutex<HashMap<(PathBuf, PathBuf, String), HashMap<u32, String>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
-    let lang_code = locale.code().to_string();
+    let lang_dir = state.dump_lang_dir(locale);
+    let cache_key = (
+        state.asset_dir.clone(),
+        lang_dir.clone(),
+        locale.code().to_string(),
+    );
     let mut cache = STAT_NAMES_CACHE.lock().unwrap();
-    if let Some(cached) = cache.get(&lang_code) {
+    if let Some(cached) = cache.get(&cache_key) {
         return cached.clone();
     }
-
-    let lang_dir = state.dump_lang_dir(locale);
     let mut map = HashMap::new();
 
     let mut weapon_prop = HashMap::new();
@@ -106,7 +110,7 @@ fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
         }
     }
 
-    cache.insert(lang_code, map.clone());
+    cache.insert(cache_key, map.clone());
     map
 }
 
@@ -292,14 +296,24 @@ pub(crate) fn disk_sub_stat_options(main_key: u32) -> Vec<u32> {
 
 pub(crate) fn all_main_stat_keys() -> &'static [u32] {
     &[
-        STAT_HP, STAT_ATK, STAT_DEF,
-        STAT_HP_PCT, STAT_ATK_PCT, STAT_DEF_PCT,
-        STAT_CRIT_RATE, STAT_CRIT_DMG,
-        STAT_ANOMALY_PROF, STAT_PEN_RATIO,
-        STAT_ANOMALY_MASTERY, STAT_IMPACT,
+        STAT_HP,
+        STAT_ATK,
+        STAT_DEF,
+        STAT_HP_PCT,
+        STAT_ATK_PCT,
+        STAT_DEF_PCT,
+        STAT_CRIT_RATE,
+        STAT_CRIT_DMG,
+        STAT_ANOMALY_PROF,
+        STAT_PEN_RATIO,
+        STAT_ANOMALY_MASTERY,
+        STAT_IMPACT,
         STAT_ENERGY_REGEN,
-        STAT_PHYSICAL_DMG, STAT_FIRE_DMG,
-        STAT_ICE_DMG, STAT_ELECTRIC_DMG, STAT_ETHER_DMG,
+        STAT_PHYSICAL_DMG,
+        STAT_FIRE_DMG,
+        STAT_ICE_DMG,
+        STAT_ELECTRIC_DMG,
+        STAT_ETHER_DMG,
         STAT_WIND_DMG,
     ]
 }

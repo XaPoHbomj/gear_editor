@@ -15,8 +15,12 @@ pub(crate) fn zon_parse_entries(data: &str) -> Vec<HashMap<String, String>> {
             let start = i;
             let mut entry_depth = 1;
             while i < bytes.len() && entry_depth > 0 {
-                if bytes[i] == b'{' { entry_depth += 1; }
-                if bytes[i] == b'}' { entry_depth -= 1; }
+                if bytes[i] == b'{' {
+                    entry_depth += 1;
+                }
+                if bytes[i] == b'}' {
+                    entry_depth -= 1;
+                }
                 i += 1;
             }
             let raw = &data[start..i - 1];
@@ -32,14 +36,22 @@ pub(crate) fn zon_parse_entries(data: &str) -> Vec<HashMap<String, String>> {
                         if pos < raw.len() && raw.as_bytes()[pos] == b'"' {
                             pos += 1;
                             while pos < raw.len() && raw.as_bytes()[pos] != b'"' {
-                                if raw.as_bytes()[pos] == b'\\' { pos += 1; }
+                                if raw.as_bytes()[pos] == b'\\' {
+                                    pos += 1;
+                                }
                                 pos += 1;
                             }
-                            if pos < raw.len() { pos += 1; }
+                            if pos < raw.len() {
+                                pos += 1;
+                            }
                             let v = raw[value_start + 1..pos - 1].to_string();
                             map.insert(key, v);
                         } else {
-                            while pos < raw.len() && raw.as_bytes()[pos] != b',' && raw.as_bytes()[pos] != b'\n' && raw.as_bytes()[pos] != b'}' {
+                            while pos < raw.len()
+                                && raw.as_bytes()[pos] != b','
+                                && raw.as_bytes()[pos] != b'\n'
+                                && raw.as_bytes()[pos] != b'}'
+                            {
                                 pos += 1;
                             }
                             let v = raw[value_start..pos].trim().to_string();
@@ -57,8 +69,12 @@ pub(crate) fn zon_parse_entries(data: &str) -> Vec<HashMap<String, String>> {
             }
             continue;
         }
-        if bytes[i] == b'{' { depth += 1; }
-        if bytes[i] == b'}' { depth -= 1; }
+        if bytes[i] == b'{' {
+            depth += 1;
+        }
+        if bytes[i] == b'}' {
+            depth -= 1;
+        }
         i += 1;
     }
     entries

@@ -20,7 +20,9 @@ pub(crate) struct ShiyuDetailQuery {
 
 fn boss_image_base_name(image_path: &str) -> String {
     if let Some(last) = image_path.rsplit('/').next() {
-        last.trim_end_matches(".webp").trim_end_matches(".png").to_string()
+        last.trim_end_matches(".webp")
+            .trim_end_matches(".png")
+            .to_string()
     } else {
         image_path.to_string()
     }
@@ -145,7 +147,11 @@ fn render_rich_text(text: &str) -> String {
 }
 
 fn da_total_hp_from_base(base_hp: f64, da_id: u32) -> i64 {
-    let multiplier = if da_mode_label_raw(da_id) == "hardcore" { 8.74 * 2.5 } else { 8.74 };
+    let multiplier = if da_mode_label_raw(da_id) == "hardcore" {
+        8.74 * 2.5
+    } else {
+        8.74
+    };
     (base_hp * multiplier).round() as i64
 }
 
@@ -159,7 +165,11 @@ fn da_mode_label_raw(id: u32) -> &'static str {
         return "normal";
     }
     let mode_digit = s.chars().nth(5).and_then(|c| c.to_digit(10)).unwrap_or(0);
-    if mode_digit == 2 { "hardcore" } else { "normal" }
+    if mode_digit == 2 {
+        "hardcore"
+    } else {
+        "normal"
+    }
 }
 
 fn shiyu_max_stage(shiyu_data: &JsonValue) -> u32 {
@@ -350,7 +360,8 @@ fn shiyu_render_monster_card(
         weakness_html = if !weakness_str.is_empty() {
             format!(
                 "<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px; margin-bottom:6px;\"><strong>{weakness_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>",
-                weakness_str, weakness_label = t(locale, "stat.weakness"),
+                weakness_str,
+                weakness_label = t(locale, "stat.weakness"),
             )
         } else {
             String::new()
@@ -358,7 +369,8 @@ fn shiyu_render_monster_card(
         resistance_html = if !resistance_str.is_empty() {
             format!(
                 "<div style=\"display:flex; align-items:center; gap:8px; margin-top:8px;\"><strong>{resistance_label}:</strong> <span style=\"display:inline-flex; align-items:center; flex-wrap:wrap; gap:6px;\">{}</span></div>",
-                resistance_str, resistance_label = t(locale, "stat.resistance"),
+                resistance_str,
+                resistance_label = t(locale, "stat.resistance"),
             )
         } else {
             String::new()
@@ -371,9 +383,13 @@ fn element_icon_path(element: &str) -> String {
     match element.to_lowercase().as_str() {
         "fire" => "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconFire.webp".to_string(),
         "ice" => "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconIce.webp".to_string(),
-        "electric" => "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconElectric.webp".to_string(),
+        "electric" => {
+            "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconElectric.webp".to_string()
+        }
         "ether" => "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconEther.webp".to_string(),
-        "physical" => "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconPhysical.webp".to_string(),
+        "physical" => {
+            "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconPhysical.webp".to_string()
+        }
         "wind" => "/assets/zzz_dump/assets/static.nanoka.cc/zzz/UI/IconWind.webp".to_string(),
         _ => String::new(),
     }
@@ -392,7 +408,12 @@ fn element_label(locale: Locale, element: &str) -> &str {
     }
 }
 
-pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale, is_admin: bool) -> String {
+pub(crate) fn render_da_shiyu_status(
+    state: &AppState,
+    _uid: u32,
+    locale: Locale,
+    is_admin: bool,
+) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
     // Default zone IDs (from remielle gamesv Calendar.zig for boss_challenge_*)
@@ -400,7 +421,7 @@ pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale
     //   mode id=690421 zone_type=1001 (normal)
     //   mode id=690422 zone_type=1002 (hardcore)
     let defaults: [(u32, u32, u32); 3] = [
-        (620561, 690421, 690422),  // shiyu, DA normal, DA hard
+        (620561, 690421, 690422), // shiyu, DA normal, DA hard
         (620561, 690421, 690422),
         (620561, 690421, 690422),
     ];
@@ -419,10 +440,41 @@ pub(crate) fn render_da_shiyu_status(state: &AppState, _uid: u32, locale: Locale
                     {}
                 </div>
             </div>"#,
-            t(locale, "status.server"), server_num,
-            render_status_card(locale, shiyu, "/shiyu/", t(locale, "status.shiyu"), dummy_path, "shiyu", server_num, "hadal_zone_scheduled", is_admin),
-            render_status_card(locale, da, "/da/", t(locale, "status.da"), dummy_path, "da", server_num, "boss_challenge_normal", is_admin),
-            render_status_card(locale, da_hard, "/da/", t(locale, "status.da_hardcore"), dummy_path, "da", server_num, "boss_challenge_hard", is_admin),
+            t(locale, "status.server"),
+            server_num,
+            render_status_card(
+                locale,
+                shiyu,
+                "/shiyu/",
+                t(locale, "status.shiyu"),
+                dummy_path,
+                "shiyu",
+                server_num,
+                "hadal_zone_scheduled",
+                is_admin
+            ),
+            render_status_card(
+                locale,
+                da,
+                "/da/",
+                t(locale, "status.da"),
+                dummy_path,
+                "da",
+                server_num,
+                "boss_challenge_normal",
+                is_admin
+            ),
+            render_status_card(
+                locale,
+                da_hard,
+                "/da/",
+                t(locale, "status.da_hardcore"),
+                dummy_path,
+                "da",
+                server_num,
+                "boss_challenge_hard",
+                is_admin
+            ),
         ));
     }
 
@@ -464,7 +516,17 @@ fn render_hadal_edit_form(server: u32, hadal_id: &str, locale: Locale) -> String
     )
 }
 
-fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &str, details_path: &FsPath, kind: &str, server: u32, hadal_id: &str, is_admin: bool) -> String {
+fn render_status_card(
+    locale: Locale,
+    zone_id: u32,
+    link_prefix: &str,
+    label: &str,
+    details_path: &FsPath,
+    kind: &str,
+    server: u32,
+    hadal_id: &str,
+    is_admin: bool,
+) -> String {
     if zone_id == 0 {
         let admin_form = if is_admin {
             render_hadal_edit_form(server, hadal_id, locale)
@@ -477,7 +539,9 @@ fn render_status_card(locale: Locale, zone_id: u32, link_prefix: &str, label: &s
                 <div class="meta">{}</div>
                 {}
             </div>"#,
-            label, t(locale, "common.na"), admin_form
+            label,
+            t(locale, "common.na"),
+            admin_form
         );
     }
 
@@ -527,7 +591,12 @@ fn extract_boss_names_from_zone(zone: &serde_json::Value, boss_names: &mut Vec<S
     }
 }
 
-fn lookup_zone_detail(details_path: &FsPath, zone_id: u32, _kind: &str, locale: Locale) -> (String, Vec<String>) {
+fn lookup_zone_detail(
+    details_path: &FsPath,
+    zone_id: u32,
+    _kind: &str,
+    locale: Locale,
+) -> (String, Vec<String>) {
     if let Ok(content) = fs::read_to_string(details_path) {
         if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(entry) = data.get(zone_id.to_string()) {
@@ -559,19 +628,23 @@ fn lookup_zone_detail(details_path: &FsPath, zone_id: u32, _kind: &str, locale: 
                 for container in map.values() {
                     if let Some(modes) = container.get("modes").and_then(|m| m.as_array()) {
                         for mode in modes {
-                            if mode.get("id").and_then(|i| i.as_u64()).map(|i| i as u32) == Some(zone_id) {
-                            let mode_name = match mode.get("zone_type").and_then(|z| z.as_u64()) {
-                                Some(1001) => t(locale, "status.da"),
-                                Some(1002) => t(locale, "status.da_hardcore"),
-                                _ => t(locale, "common.unknown"),
-                            }.to_string();
+                            if mode.get("id").and_then(|i| i.as_u64()).map(|i| i as u32)
+                                == Some(zone_id)
+                            {
+                                let mode_name =
+                                    match mode.get("zone_type").and_then(|z| z.as_u64()) {
+                                        Some(1001) => t(locale, "status.da"),
+                                        Some(1002) => t(locale, "status.da_hardcore"),
+                                        _ => t(locale, "common.unknown"),
+                                    }
+                                    .to_string();
 
-                            if let Some(zones) = mode.get("zone").and_then(|z| z.as_object()) {
-                                for zone in zones.values() {
-                                    extract_boss_names_from_zone(zone, &mut mode_boss_names);
+                                if let Some(zones) = mode.get("zone").and_then(|z| z.as_object()) {
+                                    for zone in zones.values() {
+                                        extract_boss_names_from_zone(zone, &mut mode_boss_names);
+                                    }
                                 }
-                            }
-                            return (mode_name, mode_boss_names);
+                                return (mode_name, mode_boss_names);
                             }
                         }
                     }
@@ -608,14 +681,19 @@ pub(crate) async fn da_detail(
     let (da_entry, da_name) = if let Some(entry) = map.get(&id.to_string()) {
         if let Some(modes) = entry.get("modes").and_then(|m| m.as_array()) {
             // Container with modes — pick the normal mode (zone_type 1001)
-            let normal_mode = modes.iter().find(|m| m.get("zone_type").and_then(|z| z.as_u64()) == Some(1001))
+            let normal_mode = modes
+                .iter()
+                .find(|m| m.get("zone_type").and_then(|z| z.as_u64()) == Some(1001))
                 .or_else(|| modes.first());
             match normal_mode {
                 Some(mode) => (mode.clone(), t(locale, "status.da").to_string()),
                 None => (entry.clone(), t(locale, "common.unknown").to_string()),
             }
         } else {
-            (entry.clone(), entry["name"].as_str().unwrap_or("").to_string())
+            (
+                entry.clone(),
+                entry["name"].as_str().unwrap_or("").to_string(),
+            )
         }
     } else {
         // Search for a mode with this ID in any container
@@ -629,13 +707,16 @@ pub(crate) async fn da_detail(
                             Some(1001) => t(locale, "status.da"),
                             Some(1002) => t(locale, "status.da_hardcore"),
                             _ => t(locale, "common.unknown"),
-                        }.to_string();
+                        }
+                        .to_string();
                         found = Some((mode.clone(), name));
                         break;
                     }
                 }
             }
-            if found.is_some() { break; }
+            if found.is_some() {
+                break;
+            }
         }
         match found {
             Some(v) => v,
@@ -822,12 +903,24 @@ pub(crate) async fn da_detail(
         if buff_cards.is_empty() && !selectable_buffs.is_empty() {
             let mut buffs_html = String::new();
             for (_, buff) in selectable_buffs.iter().take(3) {
-                let buff_title = buff.get("title").and_then(|t| t.as_str()).unwrap_or_else(|| t(locale, "common.buff"));
-                let buff_desc = buff.get("desc").and_then(|d| d.as_str()).unwrap_or_else(|| t(locale, "common.no_description"));
+                let buff_title = buff
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_else(|| t(locale, "common.buff"));
+                let buff_desc = buff
+                    .get("desc")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or_else(|| t(locale, "common.no_description"));
                 let clean_desc = clean_rich_text(buff_desc);
                 let rich_desc = render_rich_text(buff_desc);
-                if buff_title.trim().is_empty() && clean_desc.is_empty() { continue; }
-                let display_title = if buff_title.trim().is_empty() { t(locale, "common.buff") } else { buff_title };
+                if buff_title.trim().is_empty() && clean_desc.is_empty() {
+                    continue;
+                }
+                let display_title = if buff_title.trim().is_empty() {
+                    t(locale, "common.buff")
+                } else {
+                    buff_title
+                };
 
                 buffs_html.push_str(&format!(
                     r#"<div style="margin-bottom: 12px; padding: 10px; background: #121620; border-radius: 8px; border-left: 3px solid #4c7dff;">
@@ -1064,7 +1157,11 @@ pub(crate) async fn shiyu_detail(
 
                     let mut monster_cards = String::new();
                     for monster in monsters {
-                        monster_cards.push_str(&shiyu_render_monster_card(monster, room_weakness, locale));
+                        monster_cards.push_str(&shiyu_render_monster_card(
+                            monster,
+                            room_weakness,
+                            locale,
+                        ));
                     }
 
                     let room_buff_html = if is_new_style && selected_floor == 5 {

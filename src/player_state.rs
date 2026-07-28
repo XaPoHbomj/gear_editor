@@ -177,42 +177,29 @@ pub(crate) fn parse_slot_value(value: &str) -> u32 {
     value.trim().parse::<u32>().unwrap_or(0)
 }
 
-pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> u32 {
+pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> Option<u32> {
     let map_path = state.state_dir.join("GENERAL_DATA.bin");
-    if let Ok(data) = fs::read(&map_path) {
-        if data.len() >= 8 && data.len() % 8 == 0 {
-            let count = data.len() / 8;
-            for i in 0..count {
-                let start = i * 8;
-                let uid_bytes: [u8; 8] = data[start..start + 8].try_into().unwrap();
-                let mapped_uid = u64::from_le_bytes(uid_bytes);
-                if mapped_uid == account_uid as u64 {
-                    let candidate = 1 + i as u32;
-                    if state.state_dir.join(format!("USD_{candidate}.bin")).exists() {
-                        return candidate;
-                    }
-                }
+    let data = fs::read(&map_path).ok()?;
+    if data.len() < 8 || data.len() % 8 != 0 {
+        return None;
+    }
+    let count = data.len() / 8;
+    for i in 0..count {
+        let start = i * 8;
+        let uid_bytes: [u8; 8] = data[start..start + 8].try_into().unwrap();
+        let mapped_uid = u64::from_le_bytes(uid_bytes);
+        if mapped_uid == account_uid as u64 {
+            let candidate = 1 + i as u32;
+            if state
+                .state_dir
+                .join(format!("USD_{candidate}.bin"))
+                .exists()
+            {
+                return Some(candidate);
             }
         }
     }
-
-    let dir_scan = state.state_dir.clone();
-    if let Ok(entries) = fs::read_dir(&dir_scan) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if name_str.starts_with("USD_") && name_str.ends_with(".bin") {
-                let uid_str = &name_str[4..name_str.len() - 4];
-                if let Ok(uid) = uid_str.parse::<u32>() {
-                    if uid > 0 {
-                        return uid;
-                    }
-                }
-            }
-        }
-    }
-
-    account_uid.max(1) as u32
+    None
 }
 
 pub(crate) fn resolve_item_path(state_dir: &FsPath, uid: u32, kind: &str, item_id: u32) -> PathBuf {

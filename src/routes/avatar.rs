@@ -2,18 +2,10 @@ use crate::{
     app_state::AppState,
     auth::{get_session, html_escape_attr, redirect_to_login},
     ctl,
-    data::{
-        hakushin::{load_hakushin_data, to_asset_url},
-        templates::{
-            load_player_equips, load_player_weapons, render_equip_selects,
-            render_weapon_select,
-        },
-    },
+    data::hakushin::{load_hakushin_data, to_asset_url},
     i18n::{Locale, locale_from_headers, t},
-    player_state::{load_player_save, parse_slot_value, resolve_player_uid},
-    remielle_save::AvatarItemSave,
+    player_state::{load_player_save, resolve_player_uid},
     utils::{audit_log, shared_page_css, svg_data_uri},
-    zon::zon_parse_entries,
 };
 use axum::{
     extract::{Form, OriginalUri, Path, State},
@@ -21,21 +13,12 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use serde::Deserialize;
-use serde_json::Value as JsonValue;
-use std::fs;
 
 #[derive(Deserialize)]
 pub(crate) struct AvatarUpdateForm {
     level: u32,
     core_ability: u32,
     unlocked_talent_num: u32,
-    cur_weapon_uid: u32,
-    equip_slot_1: String,
-    equip_slot_2: String,
-    equip_slot_3: String,
-    equip_slot_4: String,
-    equip_slot_5: String,
-    equip_slot_6: String,
     skill_common_attack: u32,
     skill_special_attack: u32,
     skill_evade: u32,
@@ -54,8 +37,10 @@ pub(crate) async fn avatar_edit(
     };
 
     let state = state.clone();
-    let uid = resolve_player_uid(&state, session.uid);
     let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
     let save = load_player_save(&state, uid).unwrap_or_default();
     let Some(avatar_item) = save.avatar.iter().find(|a| a.id == avatar_id) else {
@@ -64,12 +49,7 @@ pub(crate) async fn avatar_edit(
 
     let level = avatar_item.level;
     let unlocked_talent_num = avatar_item.rank;
-    let cur_weapon_uid = avatar_item.weapon_uid;
     let skill_levels = &avatar_item.skill_levels;
-
-    let weapon_options = load_player_weapons(&state, uid, locale);
-    let dressed_equip = &avatar_item.equipment_uids;
-    let equip_options = load_player_equips(&state, uid, locale);
 
     let hakushin = load_hakushin_data(&state, locale);
     let avatar_name = hakushin
@@ -112,15 +92,7 @@ pub(crate) async fn avatar_edit(
                     <label>{mindscapes_label}</label>
                     <input name="unlocked_talent_num" type="number" min="0" max="6" value="{unlocked_talent_num}" />
         </div>
-                <div>
-                    <label>{weapon_label}</label>
-                    {weapon_select}
-                </div>
       </div>
-            <h3>{equipped_discs_label}</h3>
-            <div class="row">
-                {equip_selects}
-            </div>
 
       <h3>{skill_levels_label}</h3>
       <div class="row">
@@ -140,13 +112,9 @@ pub(crate) async fn avatar_edit(
         avatar_img = html_escape_attr(&avatar_img),
         level = level,
         unlocked_talent_num = unlocked_talent_num,
-        weapon_select = render_weapon_select(locale, cur_weapon_uid, &weapon_options),
-        equip_selects = render_equip_selects(locale, &equip_options, dressed_equip),
         skills = render_skill_inputs(locale, skill_levels),
         level_label = t(locale, "avatar.level"),
         mindscapes_label = t(locale, "avatar.mindscapes"),
-        weapon_label = t(locale, "avatar.weapon"),
-        equipped_discs_label = t(locale, "avatar.equipped_discs"),
         skill_levels_label = t(locale, "avatar.skill_levels"),
         save_label = t(locale, "avatar.save"),
         back_label = t(locale, "avatar.back"),
@@ -170,15 +138,19 @@ pub(crate) async fn avatar_update(
     };
 
     let locale = locale_from_headers(&headers);
-    let uid = resolve_player_uid(&state, session.uid);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
-    let addr = &state.ctl_addr;
+    let addr = state.active_ctl_addr(&headers);
 
     if let Err(e) = ctl::mod_avatar_meta(addr, uid, avatar_id, 0, payload.level as u64) {
         return Html(format!("ctl error (level): {e}")).into_response();
     }
 
-    if let Err(e) = ctl::mod_avatar_meta(addr, uid, avatar_id, 2, payload.unlocked_talent_num as u64) {
+    if let Err(e) =
+        ctl::mod_avatar_meta(addr, uid, avatar_id, 2, payload.unlocked_talent_num as u64)
+    {
         return Html(format!("ctl error (rank): {e}")).into_response();
     }
 
@@ -198,7 +170,13 @@ pub(crate) async fn avatar_update(
         }
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "avatar_update", &format!("avatar_id={}", avatar_id));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "avatar_update",
+        &format!("avatar_id={}", avatar_id),
+    );
 
     Redirect::to("/dashboard?tab=avatars").into_response()
 }
@@ -234,11 +212,13 @@ pub(crate) fn render_avatar_cards(state: &AppState, uid: u32, locale: Locale) ->
     }
 
     if cards.is_empty() {
-        cards.push_str(&format!("<p class=\"meta\">{}</p>", t(locale, "avatar.no_characters")));
+        cards.push_str(&format!(
+            "<p class=\"meta\">{}</p>",
+            t(locale, "avatar.no_characters")
+        ));
     }
 
-    let add_panel = render_add_avatar_panel(locale);
-    format!("{add_panel}<div class=\"cards\">{cards}</div>")
+    format!("<div class=\"cards\">{cards}</div>")
 }
 
 fn render_skill_inputs(locale: Locale, skill_levels: &[u32]) -> String {
@@ -272,72 +252,4 @@ fn render_skill_inputs(locale: Locale, skill_levels: &[u32]) -> String {
     ));
 
     html
-}
-
-fn render_add_avatar_panel(locale: Locale) -> String {
-    format!(
-        "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px;\"><form method=\"post\" action=\"/avatar/add-all\" style=\"margin:0;\"><button type=\"submit\">{}</button></form></div></div>",
-        t(locale, "nav.characters"),
-        t(locale, "avatar.add_all"),
-    )
-}
-
-pub(crate) async fn avatar_add_all(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
-) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
-    };
-
-    let locale = locale_from_headers(&headers);
-    let uid = resolve_player_uid(&state, session.uid);
-
-    let save = load_player_save(&state, uid).unwrap_or_default();
-    let existing: std::collections::HashSet<u32> = save.avatar.iter().map(|a| a.id).collect();
-
-    let base_path = state.asset_dir.join("AvatarBaseTemplateTb.zon");
-    let base_data = match fs::read_to_string(&base_path) {
-        Ok(d) => d,
-        Err(_) => {
-            return Html(format!("Failed to read AvatarBaseTemplateTb.zon")).into_response();
-        }
-    };
-    let entries = zon_parse_entries(&base_data);
-
-    let pidors: &[u32] = &[];
-    let addr = &state.ctl_addr;
-    let mut added = 0u32;
-
-    for item in &entries {
-        let Some(template_id) = item.get("id").and_then(|v| v.parse::<u32>().ok()) else {
-            continue;
-        };
-        let camp = item.get("camp").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-        if camp == 0 { continue; }
-        if pidors.contains(&template_id) { continue; }
-        if existing.contains(&template_id) { continue; }
-
-        if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 0, 60) {
-            return Html(format!("ctl error (level) avatar {template_id}: {e}")).into_response();
-        }
-        if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 2, 6) {
-            return Html(format!("ctl error (rank) avatar {template_id}: {e}")).into_response();
-        }
-        if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 3, 2047) {
-            return Html(format!("ctl error (talents) avatar {template_id}: {e}")).into_response();
-        }
-        for &skill in &[0u32, 1, 2, 3, 5, 6] {
-            let packed = (skill as u64) | ((12u64) << 32);
-            if let Err(e) = ctl::mod_avatar_meta(addr, uid, template_id, 5, packed) {
-                return Html(format!("ctl error (skill) avatar {template_id}: {e}")).into_response();
-            }
-        }
-
-        added += 1;
-    }
-
-    audit_log(&state.root_dir, &session.username, session.uid, "avatar_add_all", &format!("added {} agents", added));
-    Redirect::to("/dashboard?tab=avatars").into_response()
 }

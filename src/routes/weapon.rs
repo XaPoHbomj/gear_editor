@@ -48,7 +48,9 @@ pub(crate) async fn weapon_edit(
 
     let locale = locale_from_headers(&headers);
     let state = state.clone();
-    let uid = resolve_player_uid(&state, session.uid);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
     let Some(save) = load_player_save(&state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
@@ -136,9 +138,19 @@ pub(crate) async fn weapon_update(
         return redirect_to_login(&original_uri.0);
     };
 
-    let uid = resolve_player_uid(&state, session.uid);
+    let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
-    if let Err(e) = ctl::mod_weapon(&state.ctl_addr, uid, weapon_uid, payload.level as u8, 1, payload.refine_level as u8) {
+    if let Err(e) = ctl::mod_weapon(
+        state.active_ctl_addr(&headers),
+        uid,
+        weapon_uid,
+        payload.level as u8,
+        1,
+        payload.refine_level as u8,
+    ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
 
@@ -256,17 +268,39 @@ pub(crate) async fn weapon_add(
         return redirect_to_login(&original_uri.0);
     };
 
-    let uid = resolve_player_uid(&state, session.uid);
+    let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
 
-    if let Err(e) = ctl::create_weapon(&state.ctl_addr, uid, payload.weapon_id as u16, 60, 5, payload.refine_level as u8) {
+    if let Err(e) = ctl::create_weapon(
+        state.active_ctl_addr(&headers),
+        uid,
+        payload.weapon_id as u16,
+        60,
+        5,
+        payload.refine_level as u8,
+    ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
 
-    audit_log(&state.root_dir, &session.username, session.uid, "weapon_add", &format!("weapon_id={}", payload.weapon_id));
+    audit_log(
+        &state.root_dir,
+        &session.username,
+        session.uid,
+        "weapon_add",
+        &format!("weapon_id={}", payload.weapon_id),
+    );
     Redirect::to("/dashboard?tab=weapons").into_response()
 }
 
-pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale, filter_class: &str, filter_rarity: &str) -> String {
+pub(crate) fn render_weapon_cards(
+    state: &AppState,
+    uid: u32,
+    locale: Locale,
+    filter_class: &str,
+    filter_rarity: &str,
+) -> String {
     let weapon_templates = load_weapon_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
 
@@ -334,13 +368,41 @@ pub(crate) fn render_weapon_cards(state: &AppState, uid: u32, locale: Locale, fi
 
 fn render_weapon_filter_panel(locale: Locale, filter_class: &str, filter_rarity: &str) -> String {
     let class_opts = {
-        let all_sel = if filter_class.is_empty() { " selected" } else { "" };
-        let attack_sel = if filter_class == "Attack" { " selected" } else { "" };
-        let stun_sel = if filter_class == "Stun" { " selected" } else { "" };
-        let anomaly_sel = if filter_class == "Anomaly" { " selected" } else { "" };
-        let defense_sel = if filter_class == "Defense" { " selected" } else { "" };
-        let rupture_sel = if filter_class == "Rupture" { " selected" } else { "" };
-        let support_sel = if filter_class == "Support" { " selected" } else { "" };
+        let all_sel = if filter_class.is_empty() {
+            " selected"
+        } else {
+            ""
+        };
+        let attack_sel = if filter_class == "Attack" {
+            " selected"
+        } else {
+            ""
+        };
+        let stun_sel = if filter_class == "Stun" {
+            " selected"
+        } else {
+            ""
+        };
+        let anomaly_sel = if filter_class == "Anomaly" {
+            " selected"
+        } else {
+            ""
+        };
+        let defense_sel = if filter_class == "Defense" {
+            " selected"
+        } else {
+            ""
+        };
+        let rupture_sel = if filter_class == "Rupture" {
+            " selected"
+        } else {
+            ""
+        };
+        let support_sel = if filter_class == "Support" {
+            " selected"
+        } else {
+            ""
+        };
         format!(
             "<option value=\"\"{all_sel}>{all}</option><option value=\"Attack\"{attack_sel}>{attack}</option><option value=\"Stun\"{stun_sel}>{stun}</option><option value=\"Anomaly\"{anomaly_sel}>{anomaly}</option><option value=\"Defense\"{defense_sel}>{defense}</option><option value=\"Rupture\"{rupture_sel}>{rupture}</option><option value=\"Support\"{support_sel}>{support}</option>",
             all = t(locale, "weapon.filter_all"),
@@ -353,10 +415,26 @@ fn render_weapon_filter_panel(locale: Locale, filter_class: &str, filter_rarity:
         )
     };
     let rarity_opts = {
-        let all_sel = if filter_rarity.is_empty() { " selected" } else { "" };
-        let s_sel = if filter_rarity == "s" { " selected" } else { "" };
-        let a_sel = if filter_rarity == "a" { " selected" } else { "" };
-        let b_sel = if filter_rarity == "b" { " selected" } else { "" };
+        let all_sel = if filter_rarity.is_empty() {
+            " selected"
+        } else {
+            ""
+        };
+        let s_sel = if filter_rarity == "s" {
+            " selected"
+        } else {
+            ""
+        };
+        let a_sel = if filter_rarity == "a" {
+            " selected"
+        } else {
+            ""
+        };
+        let b_sel = if filter_rarity == "b" {
+            " selected"
+        } else {
+            ""
+        };
         format!(
             "<option value=\"\"{all_sel}>{all}</option><option value=\"s\"{s_sel}>{s}</option><option value=\"a\"{a_sel}>{a}</option><option value=\"b\"{b_sel}>{b}</option>",
             all = t(locale, "weapon.filter_all"),
@@ -396,7 +474,13 @@ fn render_add_weapon_panel(state: &AppState, locale: Locale) -> String {
     )
 }
 
-fn render_weapon_select_options(state: &AppState, selected_id: u32, locale: Locale, filter_class: &str, filter_rarity: &str) -> String {
+fn render_weapon_select_options(
+    state: &AppState,
+    selected_id: u32,
+    locale: Locale,
+    filter_class: &str,
+    filter_rarity: &str,
+) -> String {
     let hakushin = load_hakushin_data(state, locale);
     let mut items: Vec<(u32, String)> = hakushin
         .weapons
@@ -441,13 +525,41 @@ fn render_weapon_select_options(state: &AppState, selected_id: u32, locale: Loca
 }
 
 fn render_weapon_filter_class_opts(locale: Locale, filter_class: &str) -> String {
-    let all_sel = if filter_class.is_empty() { " selected" } else { "" };
-    let attack_sel = if filter_class == "Attack" { " selected" } else { "" };
-    let stun_sel = if filter_class == "Stun" { " selected" } else { "" };
-    let anomaly_sel = if filter_class == "Anomaly" { " selected" } else { "" };
-    let defense_sel = if filter_class == "Defense" { " selected" } else { "" };
-    let rupture_sel = if filter_class == "Rupture" { " selected" } else { "" };
-    let support_sel = if filter_class == "Support" { " selected" } else { "" };
+    let all_sel = if filter_class.is_empty() {
+        " selected"
+    } else {
+        ""
+    };
+    let attack_sel = if filter_class == "Attack" {
+        " selected"
+    } else {
+        ""
+    };
+    let stun_sel = if filter_class == "Stun" {
+        " selected"
+    } else {
+        ""
+    };
+    let anomaly_sel = if filter_class == "Anomaly" {
+        " selected"
+    } else {
+        ""
+    };
+    let defense_sel = if filter_class == "Defense" {
+        " selected"
+    } else {
+        ""
+    };
+    let rupture_sel = if filter_class == "Rupture" {
+        " selected"
+    } else {
+        ""
+    };
+    let support_sel = if filter_class == "Support" {
+        " selected"
+    } else {
+        ""
+    };
     format!(
         "<option value=\"\"{all_sel}>{all}</option><option value=\"Attack\"{attack_sel}>{attack}</option><option value=\"Stun\"{stun_sel}>{stun}</option><option value=\"Anomaly\"{anomaly_sel}>{anomaly}</option><option value=\"Defense\"{defense_sel}>{defense}</option><option value=\"Rupture\"{rupture_sel}>{rupture}</option><option value=\"Support\"{support_sel}>{support}</option>",
         all = t(locale, "weapon.filter_all"),
@@ -461,10 +573,26 @@ fn render_weapon_filter_class_opts(locale: Locale, filter_class: &str) -> String
 }
 
 fn render_weapon_filter_rarity_opts(locale: Locale, filter_rarity: &str) -> String {
-    let all_sel = if filter_rarity.is_empty() { " selected" } else { "" };
-    let s_sel = if filter_rarity == "s" { " selected" } else { "" };
-    let a_sel = if filter_rarity == "a" { " selected" } else { "" };
-    let b_sel = if filter_rarity == "b" { " selected" } else { "" };
+    let all_sel = if filter_rarity.is_empty() {
+        " selected"
+    } else {
+        ""
+    };
+    let s_sel = if filter_rarity == "s" {
+        " selected"
+    } else {
+        ""
+    };
+    let a_sel = if filter_rarity == "a" {
+        " selected"
+    } else {
+        ""
+    };
+    let b_sel = if filter_rarity == "b" {
+        " selected"
+    } else {
+        ""
+    };
     format!(
         "<option value=\"\"{all_sel}>{all}</option><option value=\"s\"{s_sel}>{s}</option><option value=\"a\"{a_sel}>{a}</option><option value=\"b\"{b_sel}>{b}</option>",
         all = t(locale, "weapon.filter_all"),

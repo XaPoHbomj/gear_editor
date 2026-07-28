@@ -16,7 +16,6 @@ pub(crate) struct HakushinData {
     pub(crate) avatars: HashMap<u32, HakushinEntry>,
     pub(crate) weapons: HashMap<u32, HakushinEntry>,
     pub(crate) discs: HashMap<u32, HakushinEntry>,
-    pub(crate) bangboos: HashMap<u32, HakushinEntry>,
     pub(crate) weapon_info: HashMap<u32, WeaponInfo>,
 }
 
@@ -90,12 +89,6 @@ pub(crate) fn load_hakushin_data(state: &AppState, locale: Locale) -> HakushinDa
             "name",
             &["icon_local", "icon"],
         ),
-        bangboos: load_hakushin_list(
-            &state.root_dir,
-            &lang_dir.join("bangboos.json"),
-            "name",
-            &["icon_local", "icon"],
-        ),
         weapon_info: load_weapon_info(&lang_dir.join("weapon_details.json")),
     };
 
@@ -109,7 +102,6 @@ fn hakushin_data_fingerprint(dump_dir: &FsPath) -> u64 {
         "characters.json",
         "weapons.json",
         "drive_discs.json",
-        "bangboos.json",
         "weapon_details.json",
     ] {
         let path = dump_dir.join(file_name);
@@ -192,7 +184,13 @@ fn load_weapon_info(path: &FsPath) -> HashMap<u32, WeaponInfo> {
             .unwrap_or("")
             .to_string();
         let rarity = item.get("rarity").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        result.insert(id as u32, WeaponInfo { weapon_type, rarity });
+        result.insert(
+            id as u32,
+            WeaponInfo {
+                weapon_type,
+                rarity,
+            },
+        );
     }
     result
 }

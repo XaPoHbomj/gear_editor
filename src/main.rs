@@ -23,16 +23,15 @@ mod updates;
 mod utils;
 mod zon;
 
-use app_state::AppState;
+use app_state::{AppState, ServerMode, active_server_mode, state_with_active_server};
 use assets::asset_handler;
 use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_encode_component};
 use i18n::{Locale, locale_from_headers, t};
 use player_state::resolve_player_uid;
-use routes::auth::{login, login_page, logout};
-use routes::avatar::{avatar_add_all, avatar_edit, avatar_update, render_avatar_cards};
-use routes::bangboo::{bangboo_add_all, bangboo_edit, bangboo_update, render_bangboo_cards};
-use routes::challenges::{da_detail, render_da_shiyu_status, shiyu_detail};
 use routes::admin::{admin_delete_update, admin_update_hadal_zone, admin_upload_update};
+use routes::auth::{login, login_page, logout, switch_server};
+use routes::avatar::{avatar_edit, avatar_update, render_avatar_cards};
+use routes::challenges::{da_detail, render_da_shiyu_status, shiyu_detail};
 use routes::equip::{
     equip_add, equip_delete_all_unlocked, equip_delete_submit, equip_edit, equip_generate,
     equip_generate_submit, equip_lock_selected, equip_new, equip_update, render_equip_cards,
@@ -67,30 +66,46 @@ async fn main() {
     let state_dir = env::var("GEAR_STATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("remielle/Persistent/LocalStorage"));
+    let prod_state_dir = env::var("GEAR_STATE_DIR_PROD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("remielle_prod/Persistent/LocalStorage"));
     let asset_dir = env::var("GEAR_ASSET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("remielle/assets/filecfg"));
+    let prod_asset_dir = env::var("GEAR_ASSET_DIR_PROD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("remielle_prod/assets/filecfg"));
     let dump_dir = env::var("ZZZ_DUMP_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("zzz_dump/latest"));
 
     let ctl_addr = env::var("GEAR_CTL_ADDRESS").unwrap_or_else(|_| "127.0.0.1:15811".to_string());
+    let prod_ctl_addr =
+        env::var("GEAR_CTL_ADDRESS_PROD").unwrap_or_else(|_| "127.0.0.1:15911".to_string());
+    let passwd_path = env::var("GEAR_PASSWD_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("remielle/Persistent/SDK"))
+        .join("passwd");
 
     let state = AppState {
         state_dir,
+        prod_state_dir,
         asset_dir,
+        prod_asset_dir,
         dump_dir,
         root_dir: root,
         ctl_addr,
+        prod_ctl_addr,
+        passwd_path,
     };
 
     let app = Router::new()
         .route("/", get(login_page))
         .route("/login", post(login))
         .route("/dashboard", get(dashboard))
+        .route("/switch-server", get(switch_server))
         .route("/logout", get(logout))
         .route("/avatar/:id", get(avatar_edit).post(avatar_update))
-        .route("/avatar/add-all", post(avatar_add_all))
         .route("/weapon/:uid", get(weapon_edit).post(weapon_update))
         .route("/weapon/new", get(weapon_new).post(weapon_add))
         .route("/equip/:uid", get(equip_edit).post(equip_update))
@@ -105,9 +120,10 @@ async fn main() {
             post(equip_delete_all_unlocked),
         )
         .route("/equip/lock-selected", post(equip_lock_selected))
-        .route("/bangboo/:uid", get(bangboo_edit).post(bangboo_update))
-        .route("/bangboo/add-all", post(bangboo_add_all))
-        .route("/admin/upload-update", post(admin_upload_update).layer(DefaultBodyLimit::disable()))
+        .route(
+            "/admin/upload-update",
+            post(admin_upload_update).layer(DefaultBodyLimit::disable()),
+        )
         .route("/admin/delete-update", post(admin_delete_update))
         .route("/admin/update-hadal-zone", post(admin_update_hadal_zone))
         .route("/da/:id", get(da_detail))
@@ -156,8 +172,17 @@ async fn dashboard(
     let filter_page = query.page.and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
     let filter_weapon_class = query.weapon_class.unwrap_or_default();
     let filter_weapon_rarity = query.weapon_rarity.unwrap_or_default();
-    let uid = resolve_player_uid(&state, session.uid);
-    let version = state.read_version();
+
+    let current_mode = active_server_mode(&headers);
+    let active_state = state_with_active_server(&state, &headers);
+    let uid = match resolve_player_uid(&active_state, session.uid) {
+        Some(uid) => uid,
+        None => {
+            return Html(t(locale_from_headers(&headers), "player.not_found")).into_response();
+        }
+    };
+    let beta_version = state.read_version(false);
+    let prod_version = state.read_version(true);
     let is_admin = is_admin(&session);
 
     let pending_count = session.pending_writes.len();
@@ -166,6 +191,23 @@ async fn dashboard(
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("localhost:3001");
+
+    let next = sanitize_next_path(
+        original_uri
+            .0
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/dashboard"),
+    )
+    .unwrap_or_else(|| "/dashboard".to_string());
+    let switch_beta_href = format!(
+        "/switch-server?target=beta&next={}",
+        url_encode_component(&next)
+    );
+    let switch_prod_href = format!(
+        "/switch-server?target=prod&next={}",
+        url_encode_component(&next)
+    );
 
     let encoded_next = url_encode_component("/dashboard");
     let mut lang_opts = String::new();
@@ -187,14 +229,23 @@ async fn dashboard(
     let tab_avatars = if tab == "avatars" { "active" } else { "" };
     let tab_weapons = if tab == "weapons" { "active" } else { "" };
     let tab_discs = if tab == "discs" { "active" } else { "" };
-    let tab_bangboos = if tab == "bangboos" { "active" } else { "" };
     let tab_updates = if tab == "updates" { "active" } else { "" };
     let tab_status = if tab == "status" { "active" } else { "" };
 
-    let title_suffix = if version.is_empty() {
-        format!(" — Remielle")
-    } else {
-        format!(" — Remielle {version}")
+    let title_suffix = {
+        let mode = match current_mode {
+            ServerMode::Beta => "Beta",
+            ServerMode::Prod => "Prod",
+        };
+        let version = match current_mode {
+            ServerMode::Beta => &beta_version,
+            ServerMode::Prod => &prod_version,
+        };
+        if version.is_empty() {
+            format!(" — Remielle {mode}")
+        } else {
+            format!(" — Remielle {mode} {version}")
+        }
     };
 
     let body = format!(
@@ -260,6 +311,7 @@ async fn dashboard(
         .menu-button {{ display: inline-flex; flex: 0 0 auto; }}
         .desktop-tabs {{ display: none; }}
         .desktop-logout {{ display: none; }}
+        .desktop-mode {{ display: none; }}
         .container {{ padding: 14px; }}
         .cards {{ grid-template-columns: 1fr; }}
         .row {{ grid-template-columns: 1fr; }}
@@ -286,13 +338,16 @@ async fn dashboard(
         <a class="{tab_avatars}" href="/dashboard?tab=avatars">{nav_characters}</a>
         <a class="{tab_weapons}" href="/dashboard?tab=weapons">{nav_weapons}</a>
         <a class="{tab_discs}" href="/dashboard?tab=discs">{nav_discs}</a>
-        <a class="{tab_bangboos}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
         <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
         <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     </div>
     <div class="desktop-actions" style="display:flex; align-items:center; gap:10px;">
         <div class="meta">{signed_in_as} {username}</div>
         <div class="lang-select">{lang_selector}</div>
+        <div class="desktop-mode" style="display:flex; gap:4px;">
+            <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta}</a>
+            <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod}</a>
+        </div>
         <a href="/logout" class="desktop-logout" style="padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
         <form method="post" action="/apply" style="margin:0;">
             <input type="hidden" name="session" value="{session_id}" />
@@ -305,12 +360,15 @@ async fn dashboard(
     <a class="{tab_avatars}" href="/dashboard?tab=avatars">{nav_characters}</a>
     <a class="{tab_weapons}" href="/dashboard?tab=weapons">{nav_weapons}</a>
     <a class="{tab_discs}" href="/dashboard?tab=discs">{nav_discs}</a>
-    <a class="{tab_bangboos}" href="/dashboard?tab=bangboos">{nav_bangboos}</a>
     <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
     <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px; width:100%; box-sizing:border-box;">
         <div class="meta">{signed_in_as} {username}</div>
         {lang_selector}
+        <div style="display:flex; gap:4px; width:100%;">
+            <a href="{switch_beta_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta_mobile}</a>
+            <a href="{switch_prod_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod_mobile}</a>
+        </div>
         <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
     </div>
 </aside>
@@ -324,34 +382,90 @@ async fn dashboard(
         tab_avatars = tab_avatars,
         tab_weapons = tab_weapons,
         tab_discs = tab_discs,
-        tab_bangboos = tab_bangboos,
         tab_status = tab_status,
-
         content = match tab.as_str() {
-            "weapons" => render_weapon_cards(&state, uid, locale, &filter_weapon_class, &filter_weapon_rarity),
-            "discs" => render_equip_cards(&state, uid, delete_mode, lock_mode, locale, filter_set_id, filter_slot, filter_main_stat, query.status.as_deref(), filter_page),
-            "bangboos" => render_bangboo_cards(&state, uid, locale),
+            "weapons" => render_weapon_cards(
+                &active_state,
+                uid,
+                locale,
+                &filter_weapon_class,
+                &filter_weapon_rarity
+            ),
+            "discs" => render_equip_cards(
+                &active_state,
+                uid,
+                delete_mode,
+                lock_mode,
+                locale,
+                filter_set_id,
+                filter_slot,
+                filter_main_stat,
+                query.status.as_deref(),
+                filter_page
+            ),
 
             "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-            "status" => render_status_tab(&state, uid, locale, is_admin),
-            _ => render_avatar_cards(&state, uid, locale),
+            "status" => render_status_tab(&active_state, uid, locale, is_admin),
+            _ => render_avatar_cards(&active_state, uid, locale),
         },
         session_id = session_id,
         username = session.username,
         pending_count = pending_count,
+        switch_beta_href = switch_beta_href,
+        switch_prod_href = switch_prod_href,
         lang_selector = lang_selector,
         lang_attr = locale.lang_attr(),
         title_suffix = title_suffix,
         nav_characters = t(locale, "nav.characters"),
         nav_weapons = t(locale, "nav.weapons"),
         nav_discs = t(locale, "nav.discs"),
-        nav_bangboos = t(locale, "nav.bangboos"),
-
         nav_client_updates = t(locale, "nav.client_updates"),
         nav_status = t(locale, "nav.status"),
         signed_in_as = t(locale, "header.signed_in_as"),
         apply_changes = t(locale, "header.apply_changes"),
+        header_beta = {
+            let v = &beta_version;
+            if v.is_empty() {
+                t(locale, "header.beta").to_string()
+            } else {
+                format!("{} {}", t(locale, "header.beta"), v)
+            }
+        },
+        header_prod = {
+            let v = &prod_version;
+            if v.is_empty() {
+                t(locale, "header.prod").to_string()
+            } else {
+                format!("{} {}", t(locale, "header.prod"), v)
+            }
+        },
+        header_beta_mobile = {
+            let v = &beta_version;
+            if v.is_empty() {
+                t(locale, "header.beta").to_string()
+            } else {
+                format!("{} {}", t(locale, "header.beta"), v)
+            }
+        },
+        header_prod_mobile = {
+            let v = &prod_version;
+            if v.is_empty() {
+                t(locale, "header.prod").to_string()
+            } else {
+                format!("{} {}", t(locale, "header.prod"), v)
+            }
+        },
         logout_label = t(locale, "header.logout"),
+        beta_active = if current_mode == ServerMode::Beta {
+            "background:#4c7dff;color:#fff;"
+        } else {
+            "background:#2a3140;color:#c7d1e0;"
+        },
+        prod_active = if current_mode == ServerMode::Prod {
+            "background:#4c7dff;color:#fff;"
+        } else {
+            "background:#2a3140;color:#c7d1e0;"
+        },
     );
 
     Html(body).into_response()

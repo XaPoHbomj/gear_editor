@@ -1,4 +1,4 @@
-use crate::app_state::{cookie_value, AppState};
+use crate::app_state::{AppState, cookie_value};
 use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
@@ -35,8 +35,7 @@ pub(crate) fn validate_login(
     username: &str,
     password: &str,
 ) -> Result<Option<(Session, bool)>, String> {
-    let passwd_path = state.state_dir.join("../SDK/passwd");
-    let data = std::fs::read(&passwd_path).map_err(|e| format!("read passwd: {e}"))?;
+    let data = std::fs::read(&state.passwd_path).map_err(|e| format!("read passwd: {e}"))?;
     if data.len() < 8 {
         return Err("invalid passwd file".into());
     }
@@ -48,20 +47,30 @@ pub(crate) fn validate_login(
     let mut pos = 8;
     let mut names = Vec::with_capacity(count);
     for _ in 0..count {
-        let end = data[pos..].iter().position(|b| *b == 0).unwrap_or(32).min(32);
-        names.push(std::str::from_utf8(&data[pos..pos + end]).unwrap_or("").to_string());
+        let end = data[pos..]
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(32)
+            .min(32);
+        names.push(
+            std::str::from_utf8(&data[pos..pos + end])
+                .unwrap_or("")
+                .to_string(),
+        );
         pos += 32;
     }
     pos += count * 64; // skip tokens
     let mut found_uid = None;
-    let mut found_idx = None;
     for i in 0..count {
-        let hash_end = data[pos..].iter().position(|b| *b == 0).unwrap_or(257).min(257);
+        let hash_end = data[pos..]
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(257)
+            .min(257);
         let hash_str = std::str::from_utf8(&data[pos..pos + hash_end]).unwrap_or("");
         if names[i] == username {
             if !hash_str.is_empty() && bcrypt::verify(password, hash_str).unwrap_or(false) {
                 found_uid = Some(i as i32 + 1);
-                found_idx = Some(i);
             }
             break;
         }

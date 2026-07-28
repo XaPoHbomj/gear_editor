@@ -25,7 +25,11 @@ pub(crate) fn audit_log(root_dir: &Path, username: &str, uid: i32, action: &str,
     );
 
     use std::io::Write;
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
     }
