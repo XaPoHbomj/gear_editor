@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    app_state::{ServerMode, parse_server_mode},
+    app_state::parse_server_selection,
     auth::{
         get_session, html_escape_attr, html_escape_text, insert_session, redirect_to_login,
         remove_session, sanitize_next_path, set_session, url_encode_component, validate_login,
@@ -182,7 +182,7 @@ pub(crate) async fn switch_server(
         return redirect_to_login(&original_uri.0);
     };
 
-    let mode = parse_server_mode(query.target.as_deref().unwrap_or("beta"));
+    let sel = parse_server_selection(query.target.as_deref().unwrap_or("beta:1"));
     let next = query
         .next
         .as_deref()
@@ -193,11 +193,8 @@ pub(crate) async fn switch_server(
     set_session(session_id, session);
 
     let mut response = Redirect::to(&next).into_response();
-    let value = match mode {
-        ServerMode::Beta => "gear_server=beta; Path=/; SameSite=Lax",
-        ServerMode::Prod => "gear_server=prod; Path=/; SameSite=Lax",
-    };
-    if let Ok(header_value) = HeaderValue::from_str(value) {
+    let value = format!("gear_server={}; Path=/; SameSite=Lax", sel.cookie_value());
+    if let Ok(header_value) = HeaderValue::from_str(&value) {
         response
             .headers_mut()
             .insert(header::SET_COOKIE, header_value);

@@ -1,5 +1,5 @@
 use crate::{
-    app_state::AppState,
+    app_state::{AppState, state_with_active_server},
     auth::{get_session, html_escape_attr, redirect_to_login},
     ctl,
     data::{
@@ -47,7 +47,7 @@ pub(crate) async fn weapon_edit(
     };
 
     let locale = locale_from_headers(&headers);
-    let state = state.clone();
+    let state = state_with_active_server(&state, &headers);
     let Some(uid) = resolve_player_uid(&state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
@@ -139,12 +139,13 @@ pub(crate) async fn weapon_update(
     };
 
     let locale = locale_from_headers(&headers);
+    let state = state_with_active_server(&state, &headers);
     let Some(uid) = resolve_player_uid(&state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
     if let Err(e) = ctl::mod_weapon(
-        state.active_ctl_addr(&headers),
+        &state.active_ctl_addr(&headers),
         uid,
         weapon_uid,
         payload.level as u8,
@@ -168,6 +169,7 @@ pub(crate) async fn weapon_new(
     };
 
     let locale = locale_from_headers(&headers);
+    let state = state_with_active_server(&state, &headers);
     let filter_class = query.class.unwrap_or_default();
     let filter_rarity = query.rarity.unwrap_or_default();
     let options = render_weapon_select_options(&state, 0, locale, &filter_class, &filter_rarity);
@@ -269,12 +271,13 @@ pub(crate) async fn weapon_add(
     };
 
     let locale = locale_from_headers(&headers);
+    let state = state_with_active_server(&state, &headers);
     let Some(uid) = resolve_player_uid(&state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
     if let Err(e) = ctl::create_weapon(
-        state.active_ctl_addr(&headers),
+        &state.active_ctl_addr(&headers),
         uid,
         payload.weapon_id as u16,
         60,

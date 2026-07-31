@@ -323,7 +323,7 @@ pub(crate) async fn equip_update(
     }
 
     if let Err(e) = ctl::mod_equip(
-        active_state.active_ctl_addr(&headers),
+        &active_state.active_ctl_addr(&headers),
         uid,
         equip_uid,
         payload.level as u8,
@@ -542,7 +542,7 @@ pub(crate) async fn equip_add(
     }
 
     if let Err(e) = ctl::create_equip(
-        active_state.active_ctl_addr(&headers),
+        &active_state.active_ctl_addr(&headers),
         uid,
         item_id as u16,
         15,
@@ -715,7 +715,7 @@ pub(crate) async fn equip_generate_submit(
         };
 
         if let Err(e) = ctl::create_equip(
-            active_state.active_ctl_addr(&headers),
+            &active_state.active_ctl_addr(&headers),
             uid,
             item_id as u16,
             15,
@@ -755,7 +755,7 @@ pub(crate) async fn equip_delete_submit(
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
     let selected: Vec<u32> = parse_selected_equip_uids(&raw_form_text);
 
-    let addr = active_state.active_ctl_addr(&headers);
+    let addr = &active_state.active_ctl_addr(&headers);
     let mut deleted = 0usize;
     for equip_uid in selected {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
@@ -793,7 +793,7 @@ pub(crate) async fn equip_delete_all_unlocked(
         .flat_map(|s| s.equip.iter().map(|e| e.uid))
         .collect();
 
-    let addr = active_state.active_ctl_addr(&headers);
+    let addr = &active_state.active_ctl_addr(&headers);
     let mut deleted = 0usize;
     for equip_uid in uids {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {

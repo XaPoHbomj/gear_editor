@@ -83,9 +83,11 @@ bin_remielle/Persistent/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GEAR_EDITOR_ADDR` | `127.0.0.1:3001` | Bind address |
-| `GEAR_CTL_ADDRESS` | `127.0.0.1:15811` | Target server ctl port for mutations |
-| `GEAR_STATE_DIR` | `../remielle/Persistent/LocalStorage` | Player save directory |
-| `ZZZ_DUMP_DIR` | `../zzz_dump/latest` | Dump data for item names/icons |
+| `GEAR_CTL_ADDRESS` | `127.0.0.1:15811` | Base beta ctl port (server 1); server N = port + N - 1 |
+| `GEAR_STATE_DIR` | `../bin_remielle` | Base beta per-server save dir (server N under `serverN/Persistent/LocalStorage`) |
+| `GEAR_STATE_DIR_PROD` | `../bin_remielle_prod` | Base prod per-server save dir |
+| `ZZZ_DUMP_DIR` | `../zzz_dump/latest` | Dump data for item names/icons (Beta) |
+| `ZZZ_LIVE_DUMP_DIR` | `../zzz_dump/live` | Dump data for item names/icons (Prod) |
 | `GEAR_ROOT_DIR` | auto-detected | Workspace root dir |
 
 ### Build & run

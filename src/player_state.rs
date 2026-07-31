@@ -178,6 +178,7 @@ pub(crate) fn parse_slot_value(value: &str) -> u32 {
 }
 
 pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> Option<u32> {
+    let base_uid = state.base_player_uid.max(1);
     let map_path = state.state_dir.join("GENERAL_DATA.bin");
     let data = fs::read(&map_path).ok()?;
     if data.len() < 8 || data.len() % 8 != 0 {
@@ -189,7 +190,7 @@ pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> Option<u
         let uid_bytes: [u8; 8] = data[start..start + 8].try_into().unwrap();
         let mapped_uid = u64::from_le_bytes(uid_bytes);
         if mapped_uid == account_uid as u64 {
-            let candidate = 1 + i as u32;
+            let candidate = base_uid + i as u32;
             if state
                 .state_dir
                 .join(format!("USD_{candidate}.bin"))

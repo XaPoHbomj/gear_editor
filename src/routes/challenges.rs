@@ -12,7 +12,31 @@ use axum::{
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
 use std::{fs, path::Path as FsPath};
+
+// In-memory cache of entrance zone IDs, keyed per server save dir.
+// Seeded from the per-server CALENDAR.bin on first read; updated when ctl updates succeed
+// so the status tab reflects changes immediately without restarting the game server.
+// Persists across server switches so each server keeps its own in-memory values.
+static ZONE_CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, HashMap<u32, u32>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn zone_cache_ensure(state: &AppState) {
+    let mut guard = ZONE_CACHE.lock().unwrap();
+    guard
+        .entry(state.state_dir.clone())
+        .or_insert_with(|| read_calendar_entrance_zones(state));
+}
+
+pub(crate) fn set_zone_cache_value(state: &AppState, entrance_id: u32, zone_id: u32) {
+    let mut guard = ZONE_CACHE.lock().unwrap();
+    guard
+        .entry(state.state_dir.clone())
+        .or_insert_with(|| read_calendar_entrance_zones(state))
+        .insert(entrance_id, zone_id);
+}
 
 #[derive(Deserialize)]
 pub(crate) struct ShiyuDetailQuery {
@@ -409,16 +433,11 @@ fn element_label(locale: Locale, element: &str) -> &str {
     }
 }
 
-fn read_calendar_entrance_zones(state: &AppState, root_dir: &FsPath) -> HashMap<u32, u32> {
-    // Try state_dir first (bin_remielle/Persistent/LocalStorage/), then fall back to
-    // the server's CWD directory (remielle/Persistent/LocalStorage/ for serve-all).
-    let paths = [
-        state.state_dir.join("CALENDAR.bin"),
-        root_dir.join("remielle/Persistent/LocalStorage/CALENDAR.bin"),
-    ];
-    let data = paths.iter().find_map(|p| fs::read(p).ok());
-    let Some(data) = data else {
-        return HashMap::new();
+fn read_calendar_entrance_zones(state: &AppState) -> HashMap<u32, u32> {
+    // state.state_dir is already the per-server dir (bin_remielle/serverN/Persistent/LocalStorage).
+    let data = match fs::read(state.state_dir.join("CALENDAR.bin")) {
+        Ok(d) => d,
+        Err(_) => return HashMap::new(),
     };
     if data.len() < 4 {
         return HashMap::new();
@@ -455,80 +474,65 @@ pub(crate) fn render_da_shiyu_status(
 ) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
-    let calendar_zones = read_calendar_entrance_zones(state, &state.root_dir);
+    zone_cache_ensure(state);
     let get_zone = |entrance_index: u32| -> u32 {
-        calendar_zones.get(&entrance_index).copied().unwrap_or(0)
+        ZONE_CACHE
+            .lock()
+            .unwrap()
+            .get(&state.state_dir)
+            .and_then(|m| m.get(&entrance_index).copied())
+            .unwrap_or(0)
     };
-
-    let defaults: [(u32, u32, u32); 3] = [
-        (
-            get_zone(1),  // hadal_zone_scheduled
-            get_zone(9),  // boss_challenge_normal
-            get_zone(16), // boss_challenge_hard
-        ),
-        (
-            get_zone(1),
-            get_zone(9),
-            get_zone(16),
-        ),
-        (
-            get_zone(1),
-            get_zone(9),
-            get_zone(16),
-        ),
-    ];
 
     let mut out = String::new();
 
-    for server_idx in 0..3 {
-        let server_num = server_idx as u32 + 1;
-        let (shiyu, da, da_hard) = defaults[server_idx];
-        out.push_str(&format!(
-            r#"<div class="panel" style="display:block; margin-bottom:16px;">
-                <h3 style="margin:0 0 14px 0; font-size:16px;">{} {}</h3>
+    let (shiyu, da, da_hard) = (
+        get_zone(1),  // hadal_zone_scheduled
+        get_zone(9),  // boss_challenge_normal
+        get_zone(16), // boss_challenge_hard
+    );
+    out.push_str(&format!(
+        r#"<div class="panel" style="display:block; margin-bottom:16px;">
                 <div class="cards">
                     {}
                     {}
                     {}
                 </div>
             </div>"#,
-            t(locale, "status.server"),
-            server_num,
-            render_status_card(
-                locale,
-                shiyu,
-                "/shiyu/",
-                t(locale, "status.shiyu"),
-                dummy_path,
-                "shiyu",
-                server_num,
-                "hadal_zone_scheduled",
-                is_admin
-            ),
-            render_status_card(
-                locale,
-                da,
-                "/da/",
-                t(locale, "status.da"),
-                dummy_path,
-                "da",
-                server_num,
-                "boss_challenge_normal",
-                is_admin
-            ),
-            render_status_card(
-                locale,
-                da_hard,
-                "/da/",
-                t(locale, "status.da_hardcore"),
-                dummy_path,
-                "da",
-                server_num,
-                "boss_challenge_hard",
-                is_admin
-            ),
-        ));
-    }
+        render_status_card(
+            locale,
+            shiyu,
+            "/shiyu/",
+            t(locale, "status.shiyu"),
+            dummy_path,
+            "shiyu",
+            1,
+            "hadal_zone_scheduled",
+            is_admin
+        ),
+        render_status_card(
+            locale,
+            da,
+            "/da/",
+            t(locale, "status.da"),
+            dummy_path,
+            "da",
+            1,
+            "boss_challenge_normal",
+            is_admin
+        ),
+        render_status_card(
+            locale,
+            da_hard,
+            "/da/",
+            t(locale, "status.da_hardcore"),
+            dummy_path,
+            "da",
+            1,
+            "boss_challenge_hard",
+            is_admin
+        ),
+    ));
 
     out
 }

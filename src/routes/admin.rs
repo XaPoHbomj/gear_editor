@@ -1,5 +1,5 @@
 use crate::{
-    app_state::AppState,
+    app_state::{AppState, state_for_selected_server},
     auth::{get_session, is_admin, redirect_to_login},
     ctl,
     i18n::{locale_from_headers, t},
@@ -51,13 +51,14 @@ pub(crate) async fn admin_update_hadal_zone(
         _ => return Html("Invalid hadal_id").into_response(),
     };
 
-    let addr = match ctl::ctl_addr_for_server(state.active_ctl_addr(&headers), payload.server) {
-        Ok(addr) => addr,
-        Err(e) => return Html(format!("ctl address error: {e}")).into_response(),
-    };
+    let active_state =
+        state_for_selected_server(&state, crate::app_state::active_server_selection(&headers));
+    let addr = active_state.ctl_addr.clone();
     if let Err(e) = ctl::mod_hadal_entrance(&addr, entrance_id, payload.new_zone) {
         return Html(format!("ctl error: {e}")).into_response();
     }
+
+    crate::routes::challenges::set_zone_cache_value(&active_state, entrance_id, payload.new_zone);
 
     audit_log(
         &state.root_dir,

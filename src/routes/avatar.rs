@@ -1,5 +1,5 @@
 use crate::{
-    app_state::AppState,
+    app_state::{AppState, state_with_active_server},
     auth::{get_session, html_escape_attr, redirect_to_login},
     ctl,
     data::hakushin::{load_hakushin_data, to_asset_url},
@@ -36,7 +36,7 @@ pub(crate) async fn avatar_edit(
         return redirect_to_login(&original_uri.0);
     };
 
-    let state = state.clone();
+    let state = state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
     let Some(uid) = resolve_player_uid(&state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
@@ -138,18 +138,19 @@ pub(crate) async fn avatar_update(
     };
 
     let locale = locale_from_headers(&headers);
+    let state = state_with_active_server(&state, &headers);
     let Some(uid) = resolve_player_uid(&state, session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
     let addr = state.active_ctl_addr(&headers);
 
-    if let Err(e) = ctl::mod_avatar_meta(addr, uid, avatar_id, 0, payload.level as u64) {
+    if let Err(e) = ctl::mod_avatar_meta(&addr, uid, avatar_id, 0, payload.level as u64) {
         return Html(format!("ctl error (level): {e}")).into_response();
     }
 
     if let Err(e) =
-        ctl::mod_avatar_meta(addr, uid, avatar_id, 2, payload.unlocked_talent_num as u64)
+        ctl::mod_avatar_meta(&addr, uid, avatar_id, 2, payload.unlocked_talent_num as u64)
     {
         return Html(format!("ctl error (rank): {e}")).into_response();
     }
@@ -165,7 +166,7 @@ pub(crate) async fn avatar_update(
 
     for &(skill_id, level) in &skill_map {
         let packed = (skill_id as u64) | ((level as u64) << 32);
-        if let Err(e) = ctl::mod_avatar_meta(addr, uid, avatar_id, 5, packed) {
+        if let Err(e) = ctl::mod_avatar_meta(&addr, uid, avatar_id, 5, packed) {
             return Html(format!("ctl error (skill {skill_id}): {e}")).into_response();
         }
     }

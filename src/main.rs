@@ -23,7 +23,7 @@ mod updates;
 mod utils;
 mod zon;
 
-use app_state::{AppState, ServerMode, active_server_mode, state_with_active_server};
+use app_state::{AppState, ServerSelection, active_server_selection, state_for_selected_server};
 use assets::asset_handler;
 use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_encode_component};
 use i18n::{Locale, locale_from_headers, t};
@@ -65,10 +65,10 @@ async fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let state_dir = env::var("GEAR_STATE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("remielle/Persistent/LocalStorage"));
+        .unwrap_or_else(|_| root.join("bin_remielle"));
     let prod_state_dir = env::var("GEAR_STATE_DIR_PROD")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("remielle_prod/Persistent/LocalStorage"));
+        .unwrap_or_else(|_| root.join("bin_remielle_prod"));
     let asset_dir = env::var("GEAR_ASSET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("remielle/assets/filecfg"));
@@ -78,6 +78,9 @@ async fn main() {
     let dump_dir = env::var("ZZZ_DUMP_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("zzz_dump/latest"));
+    let live_dump_dir = env::var("ZZZ_LIVE_DUMP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| root.join("zzz_dump/live"));
 
     let ctl_addr = env::var("GEAR_CTL_ADDRESS").unwrap_or_else(|_| "127.0.0.1:15811".to_string());
     let prod_ctl_addr =
@@ -93,10 +96,12 @@ async fn main() {
         asset_dir,
         prod_asset_dir,
         dump_dir,
+        live_dump_dir,
         root_dir: root,
         ctl_addr,
         prod_ctl_addr,
         passwd_path,
+        base_player_uid: 1,
     };
 
     let app = Router::new()
@@ -173,16 +178,14 @@ async fn dashboard(
     let filter_weapon_class = query.weapon_class.unwrap_or_default();
     let filter_weapon_rarity = query.weapon_rarity.unwrap_or_default();
 
-    let current_mode = active_server_mode(&headers);
-    let active_state = state_with_active_server(&state, &headers);
+    let current_sel = active_server_selection(&headers);
+    let active_state = state_for_selected_server(&state, current_sel);
     let uid = match resolve_player_uid(&active_state, session.uid) {
         Some(uid) => uid,
         None => {
             return Html(t(locale_from_headers(&headers), "player.not_found")).into_response();
         }
     };
-    let beta_version = state.read_version(false);
-    let prod_version = state.read_version(true);
     let is_admin = is_admin(&session);
 
     let pending_count = session.pending_writes.len();
@@ -200,14 +203,33 @@ async fn dashboard(
             .unwrap_or("/dashboard"),
     )
     .unwrap_or_else(|| "/dashboard".to_string());
-    let switch_beta_href = format!(
-        "/switch-server?target=beta&next={}",
-        url_encode_component(&next)
-    );
-    let switch_prod_href = format!(
-        "/switch-server?target=prod&next={}",
-        url_encode_component(&next)
-    );
+
+    // 6 server pills: Beta 1-3, Prod 1-3
+    let mut server_pills = String::new();
+    for is_prod in [false, true] {
+        for num in 1..=3u32 {
+            let sel = ServerSelection {
+                is_prod,
+                server_num: num,
+            };
+            let target = if is_prod { "prod" } else { "beta" };
+            let href = format!(
+                "/switch-server?target={target}:{num}&next={}",
+                url_encode_component(&next)
+            );
+            let active_style = if sel == current_sel {
+                "background:#4c7dff;color:#fff;"
+            } else {
+                "background:#2a3140;color:#c7d1e0;"
+            };
+            server_pills.push_str(&format!(
+                "<a href=\"{href}\" style=\"padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {active_style}\">{label}</a>",
+                href = href,
+                label = sel.label(),
+                active_style = active_style,
+            ));
+        }
+    }
 
     let encoded_next = url_encode_component("/dashboard");
     let mut lang_opts = String::new();
@@ -233,18 +255,11 @@ async fn dashboard(
     let tab_status = if tab == "status" { "active" } else { "" };
 
     let title_suffix = {
-        let mode = match current_mode {
-            ServerMode::Beta => "Beta",
-            ServerMode::Prod => "Prod",
-        };
-        let version = match current_mode {
-            ServerMode::Beta => &beta_version,
-            ServerMode::Prod => &prod_version,
-        };
+        let version = active_state.read_version(current_sel);
         if version.is_empty() {
-            format!(" — Remielle {mode}")
+            format!(" — Remielle {}", current_sel.label())
         } else {
-            format!(" — Remielle {mode} {version}")
+            format!(" — Remielle {} {version}", current_sel.label())
         }
     };
 
@@ -344,9 +359,8 @@ async fn dashboard(
     <div class="desktop-actions" style="display:flex; align-items:center; gap:10px;">
         <div class="meta">{signed_in_as} {username}</div>
         <div class="lang-select">{lang_selector}</div>
-        <div class="desktop-mode" style="display:flex; gap:4px;">
-            <a href="{switch_beta_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta}</a>
-            <a href="{switch_prod_href}" style="padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod}</a>
+        <div class="desktop-mode" style="display:flex; gap:4px; flex-wrap:wrap;">
+            {server_pills}
         </div>
         <a href="/logout" class="desktop-logout" style="padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
         <form method="post" action="/apply" style="margin:0;">
@@ -365,9 +379,8 @@ async fn dashboard(
     <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px; width:100%; box-sizing:border-box;">
         <div class="meta">{signed_in_as} {username}</div>
         {lang_selector}
-        <div style="display:flex; gap:4px; width:100%;">
-            <a href="{switch_beta_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {beta_active}">{header_beta_mobile}</a>
-            <a href="{switch_prod_href}" style="flex:1; text-align:center; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {prod_active}">{header_prod_mobile}</a>
+        <div style="display:flex; gap:4px; width:100%; flex-wrap:wrap;">
+            {server_pills}
         </div>
         <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
     </div>
@@ -411,8 +424,7 @@ async fn dashboard(
         session_id = session_id,
         username = session.username,
         pending_count = pending_count,
-        switch_beta_href = switch_beta_href,
-        switch_prod_href = switch_prod_href,
+        server_pills = server_pills,
         lang_selector = lang_selector,
         lang_attr = locale.lang_attr(),
         title_suffix = title_suffix,
@@ -423,49 +435,7 @@ async fn dashboard(
         nav_status = t(locale, "nav.status"),
         signed_in_as = t(locale, "header.signed_in_as"),
         apply_changes = t(locale, "header.apply_changes"),
-        header_beta = {
-            let v = &beta_version;
-            if v.is_empty() {
-                t(locale, "header.beta").to_string()
-            } else {
-                format!("{} {}", t(locale, "header.beta"), v)
-            }
-        },
-        header_prod = {
-            let v = &prod_version;
-            if v.is_empty() {
-                t(locale, "header.prod").to_string()
-            } else {
-                format!("{} {}", t(locale, "header.prod"), v)
-            }
-        },
-        header_beta_mobile = {
-            let v = &beta_version;
-            if v.is_empty() {
-                t(locale, "header.beta").to_string()
-            } else {
-                format!("{} {}", t(locale, "header.beta"), v)
-            }
-        },
-        header_prod_mobile = {
-            let v = &prod_version;
-            if v.is_empty() {
-                t(locale, "header.prod").to_string()
-            } else {
-                format!("{} {}", t(locale, "header.prod"), v)
-            }
-        },
         logout_label = t(locale, "header.logout"),
-        beta_active = if current_mode == ServerMode::Beta {
-            "background:#4c7dff;color:#fff;"
-        } else {
-            "background:#2a3140;color:#c7d1e0;"
-        },
-        prod_active = if current_mode == ServerMode::Prod {
-            "background:#4c7dff;color:#fff;"
-        } else {
-            "background:#2a3140;color:#c7d1e0;"
-        },
     );
 
     Html(body).into_response()
