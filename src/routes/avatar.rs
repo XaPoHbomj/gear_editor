@@ -47,6 +47,8 @@ pub(crate) async fn avatar_edit(
         return (StatusCode::NOT_FOUND, Html(t(locale, "avatar.not_found"))).into_response();
     };
 
+    let online = ctl::player_is_online(&state.active_ctl_addr(&headers), uid);
+
     let level = avatar_item.level;
     let unlocked_talent_num = avatar_item.rank;
     let skill_levels = &avatar_item.skill_levels;
@@ -86,11 +88,11 @@ pub(crate) async fn avatar_edit(
       <div class="row">
         <div>
           <label>{level_label}</label>
-          <input name="level" type="number" min="1" value="{level}" />
+          <input name="level" type="number" min="1" value="{level}" {disabled} />
         </div>
         <div>
                     <label>{mindscapes_label}</label>
-                    <input name="unlocked_talent_num" type="number" min="0" max="6" value="{unlocked_talent_num}" />
+                    <input name="unlocked_talent_num" type="number" min="0" max="6" value="{unlocked_talent_num}" {disabled} />
         </div>
       </div>
 
@@ -101,7 +103,7 @@ pub(crate) async fn avatar_edit(
 
       <div class="form-actions">
         <a href="/dashboard?tab=avatars" class="back">{back_label}</a>
-        <button type="submit">{save_label}</button>
+        {submit}
       </div>
     </form>
   </div>
@@ -112,11 +114,16 @@ pub(crate) async fn avatar_edit(
         avatar_img = html_escape_attr(&avatar_img),
         level = level,
         unlocked_talent_num = unlocked_talent_num,
-        skills = render_skill_inputs(locale, skill_levels),
+        skills = render_skill_inputs(locale, skill_levels, online),
+        disabled = if online { "" } else { "disabled" },
+        submit = if online {
+            format!("<button type=\"submit\">{}</button>", t(locale, "avatar.save"))
+        } else {
+            String::new()
+        },
         level_label = t(locale, "avatar.level"),
         mindscapes_label = t(locale, "avatar.mindscapes"),
         skill_levels_label = t(locale, "avatar.skill_levels"),
-        save_label = t(locale, "avatar.save"),
         back_label = t(locale, "avatar.back"),
         id_label = t(locale, "avatar.id"),
         avatar_edit_title = t(locale, "avatar.edit"),
@@ -144,6 +151,9 @@ pub(crate) async fn avatar_update(
     };
 
     let addr = state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(&addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
 
     if let Err(e) = ctl::mod_avatar_meta(&addr, uid, avatar_id, 0, payload.level as u64) {
         return Html(format!("ctl error (level): {e}")).into_response();
@@ -222,7 +232,8 @@ pub(crate) fn render_avatar_cards(state: &AppState, uid: u32, locale: Locale) ->
     format!("<div class=\"cards\">{cards}</div>")
 }
 
-fn render_skill_inputs(locale: Locale, skill_levels: &[u32]) -> String {
+fn render_skill_inputs(locale: Locale, skill_levels: &[u32], online: bool) -> String {
+    let disabled = if online { "" } else { "disabled" };
     let mut html = String::new();
     for (idx, label_key) in [
         (0usize, "skill.basic_attack"),
@@ -241,14 +252,14 @@ fn render_skill_inputs(locale: Locale, skill_levels: &[u32]) -> String {
             _ => unreachable!(),
         };
         html.push_str(&format!(
-            "<div><label>{label}</label><input name=\"{name}\" type=\"number\" min=\"1\" value=\"{value}\" /></div>",
+            "<div><label>{label}</label><input name=\"{name}\" type=\"number\" min=\"1\" value=\"{value}\" {disabled} /></div>",
             label = t(locale, label_key),
         ));
     }
 
     let core_ability = skill_levels.get(5).copied().unwrap_or(1);
     html.push_str(&format!(
-        "<div><label>{label}</label><input name=\"core_ability\" type=\"number\" min=\"0\" max=\"6\" value=\"{core_ability}\" /></div>",
+        "<div><label>{label}</label><input name=\"core_ability\" type=\"number\" min=\"0\" max=\"6\" value=\"{core_ability}\" {disabled} /></div>",
         label = t(locale, "avatar.core_ability"),
     ));
 

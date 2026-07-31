@@ -1,13 +1,4 @@
-use crate::{
-    AppState,
-    auth::{get_session_mut, redirect_to_login, set_session},
-    zon::format_zon_pretty,
-};
-use axum::{
-    extract::{OriginalUri, State},
-    http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Redirect},
-};
+use crate::AppState;
 use std::{fs, path::Path};
 
 pub(crate) fn audit_log(root_dir: &Path, username: &str, uid: i32, action: &str, detail: &str) {
@@ -52,43 +43,6 @@ pub(crate) fn shared_page_css() -> &'static str {
       .form-actions button{margin-top:0}\
       .preview-img{display:none;width:33.33%;aspect-ratio:1/1;object-fit:contain;border-radius:8px;border:1px solid #2a3140;background:#0f1115;margin:0 0 8px}\
       @media(max-width:768px){.container{padding:14px}.row{grid-template-columns:1fr}button{width:100%}.hero{flex-direction:column;align-items:flex-start}.hero img{width:100%;max-width:240px;height:auto;aspect-ratio:1/1}.preview-img{width:100%}}"
-}
-
-pub(crate) async fn apply_changes(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
-) -> impl IntoResponse {
-    let Some((session_id, mut session)) = get_session_mut(&headers) else {
-        return redirect_to_login(&original_uri.0);
-    };
-
-    let count = session.pending_writes.len();
-
-    for (path, content) in session.pending_writes.drain() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let formatted = format_zon_pretty(&content);
-        if let Err(err) = fs::write(&path, formatted) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(format!("Failed to write {}: {}", path.display(), err)),
-            )
-                .into_response();
-        }
-    }
-
-    audit_log(
-        &state.root_dir,
-        &session.username,
-        session.uid,
-        "apply_changes",
-        &format!("flushed {} pending writes", count),
-    );
-
-    set_session(session_id, session);
-    Redirect::to("/dashboard").into_response()
 }
 
 pub(crate) fn svg_data_uri(label: &str) -> String {

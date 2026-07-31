@@ -471,6 +471,7 @@ pub(crate) fn render_da_shiyu_status(
     _uid: u32,
     locale: Locale,
     is_admin: bool,
+    online: bool,
 ) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
@@ -508,7 +509,8 @@ pub(crate) fn render_da_shiyu_status(
             "shiyu",
             1,
             "hadal_zone_scheduled",
-            is_admin
+            is_admin,
+            online,
         ),
         render_status_card(
             locale,
@@ -519,7 +521,8 @@ pub(crate) fn render_da_shiyu_status(
             "da",
             1,
             "boss_challenge_normal",
-            is_admin
+            is_admin,
+            online,
         ),
         render_status_card(
             locale,
@@ -530,7 +533,8 @@ pub(crate) fn render_da_shiyu_status(
             "da",
             1,
             "boss_challenge_hard",
-            is_admin
+            is_admin,
+            online,
         ),
     ));
 
@@ -582,13 +586,14 @@ fn render_status_card(
     server: u32,
     hadal_id: &str,
     is_admin: bool,
+    online: bool,
 ) -> String {
+    let admin_form = if is_admin && online {
+        render_hadal_edit_form(server, hadal_id, locale)
+    } else {
+        String::new()
+    };
     if zone_id == 0 {
-        let admin_form = if is_admin {
-            render_hadal_edit_form(server, hadal_id, locale)
-        } else {
-            String::new()
-        };
         return format!(
             r#"<div class="card" style="text-decoration:none;color:inherit;opacity:0.5;">
                 <h3>{}</h3>
@@ -603,12 +608,6 @@ fn render_status_card(
 
     let (_, boss_names) = lookup_zone_detail(details_path, zone_id, kind, locale);
     let boss_list = boss_names.join("<br>");
-
-    let admin_form = if is_admin {
-        render_hadal_edit_form(server, hadal_id, locale)
-    } else {
-        String::new()
-    };
 
     format!(
         r#"<div class="card" style="text-decoration:none;color:inherit;position:relative;">

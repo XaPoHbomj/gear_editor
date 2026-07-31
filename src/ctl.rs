@@ -1,7 +1,11 @@
+use std::collections::HashMap;
 use std::net::UdpSocket;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 const CTL_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const PROBE_CACHE_TTL: Duration = Duration::from_secs(10);
 
 fn write_u8(buf: &mut [u8], pos: &mut usize, val: u8) {
     buf[*pos] = val;
@@ -221,4 +225,157 @@ pub fn mod_hadal_entrance(addr: &str, entrance_id: u32, zone_id: u32) -> Result<
     write_u32_le(&mut buf, &mut p, entrance_id);
     write_u32_le(&mut buf, &mut p, zone_id);
     send_and_ack(addr, &buf[..p])
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Presence {
+    Online,
+    Offline,
+    Unreachable,
+}
+
+type ProbeKey = (String, u32);
+
+static PROBE_CACHE: OnceLock<Mutex<HashMap<ProbeKey, (Presence, Instant)>>> = OnceLock::new();
+
+fn probe_cache() -> &'static Mutex<HashMap<ProbeKey, (Presence, Instant)>> {
+    PROBE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Returns the cached presence for (addr, player_uid) if it is still fresh.
+fn cached_presence(addr: &str, player_uid: u32) -> Option<Presence> {
+    let cache = probe_cache().lock().unwrap();
+    cache
+        .get(&(addr.to_string(), player_uid))
+        .filter(|(_, at)| at.elapsed() < PROBE_CACHE_TTL)
+        .map(|(presence, _)| *presence)
+}
+
+fn store_presence(addr: &str, player_uid: u32, presence: Presence) {
+    let mut cache = probe_cache().lock().unwrap();
+    cache.insert(
+        (addr.to_string(), player_uid),
+        (presence, Instant::now()),
+    );
+}
+
+fn probe_presence(addr: &str, player_uid: u32) -> Presence {
+    // CreateWeapon with count = 0. On a live server this is a no-op and the
+    // player is online iff we get an ACK; offline players yield NAK no_entry;
+    // a silent socket means the server is unreachable.
+    let mut buf = [0u8; 16];
+    buf[..HEADER_SIZE].copy_from_slice(&make_header(3, 0));
+    let mut p = HEADER_SIZE;
+    write_u32_le(&mut buf, &mut p, player_uid);
+    write_u32_le(&mut buf, &mut p, 0); // count = 0
+    let data = &buf[..p];
+
+    let socket = match UdpSocket::bind("0.0.0.0:0") {
+        Ok(s) => s,
+        Err(_) => return Presence::Unreachable,
+    };
+    if socket.set_read_timeout(Some(PROBE_TIMEOUT)).is_err() {
+        return Presence::Unreachable;
+    }
+    if socket.send_to(data, addr).is_err() {
+        return Presence::Unreachable;
+    }
+
+    let mut rsp = [0u8; 16];
+    match socket.recv_from(&mut rsp) {
+        Ok((n, _)) if n >= 16 => {
+            let tag = u16::from_le_bytes([rsp[2], rsp[3]]);
+            if tag == 0 {
+                Presence::Online
+            } else if tag == 1 {
+                let reason = u32::from_le_bytes([rsp[8], rsp[9], rsp[10], rsp[11]]);
+                if reason == 5 {
+                    Presence::Offline
+                } else {
+                    Presence::Unreachable
+                }
+            } else {
+                Presence::Unreachable
+            }
+        }
+        _ => Presence::Unreachable,
+    }
+}
+
+/// Check whether the player is currently online on the given server, using a
+/// short-lived cache (10s) to avoid hammering every server on each page load.
+pub fn player_is_online(addr: &str, player_uid: u32) -> bool {
+    presence_of(addr, player_uid) == Presence::Online
+}
+
+/// Presence of the player on the given server, cached for PROBE_CACHE_TTL.
+pub fn presence_of(addr: &str, player_uid: u32) -> Presence {
+    if let Some(presence) = cached_presence(addr, player_uid) {
+        return presence;
+    }
+    let presence = probe_presence(addr, player_uid);
+    store_presence(addr, player_uid, presence);
+    presence
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::UdpSocket;
+
+    fn server_handle() -> (UdpSocket, String) {
+        let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = s.local_addr().unwrap().to_string();
+        (s, addr)
+    }
+
+    #[test]
+    fn probe_classifies_online_offline_unreachable() {
+        // ACK (online)
+        {
+            let (srv, addr) = server_handle();
+            let t = std::thread::spawn(move || {
+                let mut buf = [0u8; 16];
+                let (n, peer) = srv.recv_from(&mut buf).unwrap();
+                // echo an ACK: header(8) + event(8). bytes 2-3 = event_tag = 0
+                let mut rsp = [0u8; 16];
+                rsp[2] = 0;
+                rsp[3] = 0;
+                rsp[4] = buf[4];
+                rsp[5] = buf[5];
+                rsp[6] = buf[6];
+                rsp[7] = buf[7];
+                srv.send_to(&rsp[..n.min(16)], peer).unwrap();
+            });
+            let presence = probe_presence(&addr, 1);
+            t.join().unwrap();
+            assert_eq!(presence, Presence::Online);
+        }
+        // NAK no_entry (offline)
+        {
+            let (srv, addr) = server_handle();
+            let t = std::thread::spawn(move || {
+                let mut buf = [0u8; 16];
+                let (n, peer) = srv.recv_from(&mut buf).unwrap();
+                let mut rsp = [0u8; 16];
+                rsp[2] = 1;
+                rsp[3] = 0;
+                rsp[8] = 5; // reason = no_entry
+                rsp[4] = buf[4];
+                rsp[5] = buf[5];
+                rsp[6] = buf[6];
+                rsp[7] = buf[7];
+                srv.send_to(&rsp[..n.min(16)], peer).unwrap();
+            });
+            let presence = probe_presence(&addr, 1);
+            t.join().unwrap();
+            assert_eq!(presence, Presence::Offline);
+        }
+        // No listener -> unreachable
+        {
+            let (_srv, addr) = server_handle();
+            let presence = probe_presence(&addr, 1);
+            assert_eq!(presence, Presence::Unreachable);
+        }
+    }
 }

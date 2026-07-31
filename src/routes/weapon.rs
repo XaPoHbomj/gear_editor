@@ -63,6 +63,7 @@ pub(crate) async fn weapon_edit(
     let level = weapon.level;
     let refine_level = weapon.refine;
     let weapon_id = weapon.id;
+    let online = ctl::player_is_online(&state.active_ctl_addr(&headers), uid);
     let hakushin = load_hakushin_data(&state, locale);
     let weapon_name = hakushin
         .weapons
@@ -96,12 +97,12 @@ pub(crate) async fn weapon_edit(
         </div>
     <form method="post">
       <label>{level_label}</label>
-      <input name="level" type="number" min="1" value="{level}" />
+      <input name="level" type="number" min="1" value="{level}" {disabled} />
       <label>{overclock_label}</label>
-      <input name="refine_level" type="number" min="0" value="{refine_level}" />
+      <input name="refine_level" type="number" min="0" value="{refine_level}" {disabled} />
       <div class="form-actions">
         <a href="/dashboard?tab=weapons" class="back">{back_label}</a>
-        <button type="submit">{save_label}</button>
+        {submit}
       </div>
     </form>
   </div>
@@ -113,12 +114,17 @@ pub(crate) async fn weapon_edit(
         weapon_img = html_escape_attr(&weapon_img),
         level = level,
         refine_level = refine_level,
+        disabled = if online { "" } else { "disabled" },
+        submit = if online {
+            format!("<button type=\"submit\">{}</button>", t(locale, "weapon.save"))
+        } else {
+            String::new()
+        },
         edit_title = t(locale, "weapon.edit"),
         uid_label = t(locale, "weapon.uid"),
         id_label = t(locale, "weapon.id"),
         level_label = t(locale, "weapon.level"),
         overclock_label = t(locale, "weapon.overclock"),
-        save_label = t(locale, "weapon.save"),
         back_label = t(locale, "weapon.back"),
         lang = locale.lang_attr(),
         shared_css = shared_page_css(),
@@ -144,8 +150,13 @@ pub(crate) async fn weapon_update(
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
+    let addr = state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(&addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
+
     if let Err(e) = ctl::mod_weapon(
-        &state.active_ctl_addr(&headers),
+        &addr,
         uid,
         weapon_uid,
         payload.level as u8,
@@ -164,12 +175,19 @@ pub(crate) async fn weapon_new(
     Query(query): Query<WeaponFilterQuery>,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, _session)) = get_session(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
     let locale = locale_from_headers(&headers);
     let state = state_with_active_server(&state, &headers);
+    let Some(uid) = resolve_player_uid(&state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
+    if !ctl::player_is_online(&state.active_ctl_addr(&headers), uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
+
     let filter_class = query.class.unwrap_or_default();
     let filter_rarity = query.rarity.unwrap_or_default();
     let options = render_weapon_select_options(&state, 0, locale, &filter_class, &filter_rarity);
@@ -276,8 +294,13 @@ pub(crate) async fn weapon_add(
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
+    let addr = state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(&addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
+
     if let Err(e) = ctl::create_weapon(
-        &state.active_ctl_addr(&headers),
+        &addr,
         uid,
         payload.weapon_id as u16,
         60,
@@ -303,6 +326,7 @@ pub(crate) fn render_weapon_cards(
     locale: Locale,
     filter_class: &str,
     filter_rarity: &str,
+    online: bool,
 ) -> String {
     let weapon_templates = load_weapon_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
@@ -365,7 +389,11 @@ pub(crate) fn render_weapon_cards(
     }
 
     let filter_panel = render_weapon_filter_panel(locale, filter_class, filter_rarity);
-    let add_panel = render_add_weapon_panel(state, locale);
+    let add_panel = if online {
+        render_add_weapon_panel(state, locale)
+    } else {
+        String::new()
+    };
     format!("{add_panel}{filter_panel}<div class=\"cards\">{cards}</div>")
 }
 

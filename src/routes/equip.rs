@@ -143,6 +143,8 @@ pub(crate) async fn equip_edit(
         return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
+    let online = ctl::player_is_online(&active_state.active_ctl_addr(&headers), uid);
+
     let level = equip.level;
     let star = equip.star;
     let equip_item_id = equip.id;
@@ -208,15 +210,15 @@ pub(crate) async fn equip_edit(
         </div>
     <form method="post">
       <label>{level_label}</label>
-      <input name="level" type="number" min="0" value="{level}" />
+      <input name="level" type="number" min="0" value="{level}" {disabled} />
       <label>{star_label}</label>
-      <input name="star" type="number" min="0" max="5" value="{star}" />
+      <input name="star" type="number" min="0" max="5" value="{star}" {disabled} />
 
             <h3>{main_stat_heading}</h3>
             <div class="row">
                 <div>
                     <label>{stat_label_str}</label>
-                    <select name="main_key" id="main_key">
+                    <select name="main_key" id="main_key" {disabled}>
                         {main_options}
                     </select>
                 </div>
@@ -230,7 +232,7 @@ pub(crate) async fn equip_edit(
 
       <div class="form-actions">
         <a href="/dashboard?tab=discs" class="back">{back_label}</a>
-        <button type="submit">{save_label}</button>
+        {submit}
       </div>
     </form>
   </div>
@@ -250,9 +252,16 @@ pub(crate) async fn equip_edit(
             &sub_props,
             &sub_options,
             normalized_main_key,
-            locale
+            locale,
+            online,
         ),
         script = script,
+        disabled = if online { "" } else { "disabled" },
+        submit = if online {
+            format!("<button type=\"submit\">{}</button>", t(locale, "disc.save"))
+        } else {
+            String::new()
+        },
         edit_title = t(locale, "disc.edit"),
         uid_label = t(locale, "disc.uid"),
         item_label = t(locale, "disc.item"),
@@ -262,7 +271,6 @@ pub(crate) async fn equip_edit(
         main_stat_heading = t(locale, "disc.main_stat"),
         stat_label_str = t(locale, "disc.stat"),
         sub_stats_heading = t(locale, "disc.sub_stats"),
-        save_label = t(locale, "disc.save"),
         back_label = t(locale, "disc.back"),
         shared_css = shared_page_css(),
         lang = locale.lang_attr(),
@@ -287,6 +295,11 @@ pub(crate) async fn equip_update(
     let Some(uid) = resolve_player_uid(&active_state, _session.uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
+
+    let addr = active_state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(&addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
 
     let equip_index = load_equip_template_index(&active_state.asset_dir);
     let save = load_player_save(&active_state, uid);
@@ -341,12 +354,18 @@ pub(crate) async fn equip_new(
     headers: HeaderMap,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, _session)) = get_session(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
     let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
+    if !ctl::player_is_online(&active_state.active_ctl_addr(&headers), uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
 
     let options = render_disc_select_options(&active_state, 0, locale);
     let disc_images: HashMap<u32, String> = {
@@ -367,7 +386,7 @@ pub(crate) async fn equip_new(
     let slot_options = render_slot_options(locale, 1);
     let main_options = render_stat_select_options(&state, &disk_main_stat_options(1), 0, locale);
     let sub_options = disk_sub_stat_options(0);
-    let sub_stat_rows = render_sub_stat_rows(&state, &[], &sub_options, 0, locale);
+    let sub_stat_rows = render_sub_stat_rows(&state, &[], &sub_options, 0, locale, true);
 
     let mut main_options_by_slot = HashMap::new();
     let mut sub_options_by_main = HashMap::new();
@@ -502,6 +521,11 @@ pub(crate) async fn equip_add(
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
+    let addr = active_state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(&addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
+
     let equip_index = load_equip_template_index(&active_state.asset_dir);
     let Some(item_id) =
         resolve_equip_item_id(payload.equip_set_id, payload.equip_slot, &equip_index)
@@ -567,12 +591,18 @@ pub(crate) async fn equip_generate(
     headers: HeaderMap,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, _session)) = get_session(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
     let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
+    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    };
+    if !ctl::player_is_online(&active_state.active_ctl_addr(&headers), uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
 
     let options = render_disc_select_options(&active_state, 0, locale);
     let disc_images: HashMap<u32, String> = {
@@ -687,6 +717,11 @@ pub(crate) async fn equip_generate_submit(
         return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
     };
 
+    let addr = active_state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(&addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
+
     let equip_index = load_equip_template_index(&active_state.asset_dir);
     let count_to_gen = payload.count as usize;
     let mut rng = rand::thread_rng();
@@ -756,6 +791,9 @@ pub(crate) async fn equip_delete_submit(
     let selected: Vec<u32> = parse_selected_equip_uids(&raw_form_text);
 
     let addr = &active_state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
     let mut deleted = 0usize;
     for equip_uid in selected {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
@@ -794,6 +832,9 @@ pub(crate) async fn equip_delete_all_unlocked(
         .collect();
 
     let addr = &active_state.active_ctl_addr(&headers);
+    if !ctl::player_is_online(addr, uid) {
+        return Html(t(locale, "player.offline")).into_response();
+    }
     let mut deleted = 0usize;
     for equip_uid in uids {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
@@ -929,6 +970,7 @@ pub(crate) fn render_equip_cards(
     filter_main_stat: Option<u32>,
     _filter_status: Option<&str>,
     page: u32,
+    online: bool,
 ) -> String {
     let equip_templates = load_equip_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
@@ -1083,8 +1125,12 @@ pub(crate) fn render_equip_cards(
         ));
     }
 
-    let add_panel = render_add_equip_panel(state, delete_mode, locale);
-    if delete_mode {
+    let add_panel = if online {
+        render_add_equip_panel(state, delete_mode, locale)
+    } else {
+        String::new()
+    };
+    if delete_mode && online {
         let delete_panel = format!(
             "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">{}</button><button class=\"danger\" type=\"submit\" formaction=\"/equip/delete-all-unlocked\" onclick=\"return confirm('{}');\">{}</button><a href=\"/dashboard?tab=discs\">{}</a></div></div>",
             t(locale, "disc.delete_mode"),

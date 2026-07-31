@@ -3,7 +3,7 @@ use crate::{
     app_state::parse_server_selection,
     auth::{
         get_session, html_escape_attr, html_escape_text, insert_session, redirect_to_login,
-        remove_session, sanitize_next_path, set_session, url_encode_component, validate_login,
+        remove_session, sanitize_next_path, url_encode_component, validate_login,
     },
     i18n::{Locale, locale_from_headers, t},
     utils::audit_log,
@@ -178,7 +178,7 @@ pub(crate) async fn switch_server(
     original_uri: OriginalUri,
     Query(query): Query<SwitchServerQuery>,
 ) -> impl IntoResponse {
-    let Some((session_id, mut session)) = get_session(&headers) else {
+    let Some((_session_id, _session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
@@ -188,9 +188,6 @@ pub(crate) async fn switch_server(
         .as_deref()
         .and_then(sanitize_next_path)
         .unwrap_or_else(|| "/dashboard".to_string());
-
-    session.pending_writes.clear();
-    set_session(session_id, session);
 
     let mut response = Redirect::to(&next).into_response();
     let value = format!("gear_server={}; Path=/; SameSite=Lax", sel.cookie_value());

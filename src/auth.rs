@@ -6,7 +6,6 @@ use axum::{
 use rand::{Rng, distributions::Alphanumeric};
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
@@ -26,7 +25,6 @@ pub(crate) fn insert_session(session: Session) -> String {
 pub(crate) struct Session {
     pub(crate) uid: i32,
     pub(crate) username: String,
-    pub(crate) pending_writes: HashMap<PathBuf, String>,
     pub(crate) last_active: Instant,
 }
 
@@ -82,7 +80,6 @@ pub(crate) fn validate_login(
             Session {
                 uid,
                 username: username.to_string(),
-                pending_writes: HashMap::new(),
                 last_active: Instant::now(),
             },
             is_admin,
@@ -111,15 +108,6 @@ pub(crate) fn get_session(headers: &HeaderMap) -> Option<(String, Session)> {
     } else {
         None
     }
-}
-
-pub(crate) fn get_session_mut(headers: &HeaderMap) -> Option<(String, Session)> {
-    get_session(headers)
-}
-
-pub(crate) fn set_session(session_id: String, session: Session) {
-    let store = SESSION_STORE.get_or_init(|| Mutex::new(HashMap::new()));
-    store.lock().unwrap().insert(session_id, session);
 }
 
 pub(crate) fn sanitize_next_path(value: &str) -> Option<String> {

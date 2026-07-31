@@ -53,7 +53,9 @@ pub(crate) fn render_sub_stat_rows(
     options: &[u32],
     _main_key: u32,
     locale: Locale,
+    enabled: bool,
 ) -> String {
+    let disabled = if enabled { "" } else { "disabled" };
     let mut rows = String::new();
     for idx in 0..4 {
         let (mut key, _base, add) = sub_props.get(idx).copied().unwrap_or((0, 0, 0));
@@ -63,13 +65,13 @@ pub(crate) fn render_sub_stat_rows(
             }
         }
         rows.push_str(&format!(
-            "<div><label>{}</label><select name=\"sub_key_{}\">{}</select></div>",
+            "<div><label>{}</label><select name=\"sub_key_{}\" {disabled}>{}</select></div>",
             t(locale, "disc.key"),
             idx + 1,
             render_stat_select_options(state, options, key, locale)
         ));
         rows.push_str(&format!(
-            "<div><label>{}</label><input name=\"sub_proc_{}\" type=\"number\" min=\"0\" max=\"6\" value=\"{}\" /></div>",
+            "<div><label>{}</label><input name=\"sub_proc_{}\" type=\"number\" min=\"0\" max=\"6\" value=\"{}\" {disabled} /></div>",
             t(locale, "disc.procs"),
             idx + 1,
             add
@@ -177,7 +179,9 @@ pub(crate) fn parse_slot_value(value: &str) -> u32 {
     value.trim().parse::<u32>().unwrap_or(0)
 }
 
-pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> Option<u32> {
+/// Resolve the player UID for this account on the given server, if the account
+/// has ever logged in there (a save exists on that server).
+pub(crate) fn player_uid_for(state: &AppState, account_uid: i32) -> Option<u32> {
     let base_uid = state.base_player_uid.max(1);
     let map_path = state.state_dir.join("GENERAL_DATA.bin");
     let data = fs::read(&map_path).ok()?;
@@ -201,6 +205,10 @@ pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> Option<u
         }
     }
     None
+}
+
+pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> Option<u32> {
+    player_uid_for(state, account_uid)
 }
 
 pub(crate) fn resolve_item_path(state_dir: &FsPath, uid: u32, kind: &str, item_id: u32) -> PathBuf {

@@ -23,11 +23,14 @@ mod updates;
 mod utils;
 mod zon;
 
-use app_state::{AppState, ServerSelection, active_server_selection, state_for_selected_server};
+use app_state::{
+    AppState, ServerSelection, active_server_selection, state_for_selected_server,
+};
 use assets::asset_handler;
 use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_encode_component};
+use ctl::Presence;
 use i18n::{Locale, locale_from_headers, t};
-use player_state::resolve_player_uid;
+use player_state::{player_uid_for, resolve_player_uid};
 use routes::admin::{admin_delete_update, admin_update_hadal_zone, admin_upload_update};
 use routes::auth::{login, login_page, logout, switch_server};
 use routes::avatar::{avatar_edit, avatar_update, render_avatar_cards};
@@ -38,7 +41,6 @@ use routes::equip::{
 };
 use routes::weapon::{render_weapon_cards, weapon_add, weapon_edit, weapon_new, weapon_update};
 use updates::render_client_updates_panel;
-use utils::apply_changes;
 
 #[derive(Deserialize)]
 struct TabQuery {
@@ -133,7 +135,6 @@ async fn main() {
         .route("/admin/update-hadal-zone", post(admin_update_hadal_zone))
         .route("/da/:id", get(da_detail))
         .route("/shiyu/:id", get(shiyu_detail))
-        .route("/apply", post(apply_changes))
         .route("/set-lang", get(set_language))
         .route("/assets/*path", get(asset_handler))
         .layer(CompressionLayer::new())
@@ -164,7 +165,7 @@ async fn dashboard(
     Query(query): Query<TabQuery>,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((session_id, session)) = get_session(&headers) else {
+    let Some((_session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
@@ -180,16 +181,14 @@ async fn dashboard(
 
     let current_sel = active_server_selection(&headers);
     let active_state = state_for_selected_server(&state, current_sel);
-    let uid = match resolve_player_uid(&active_state, session.uid) {
-        Some(uid) => uid,
-        None => {
-            return Html(t(locale_from_headers(&headers), "player.not_found")).into_response();
-        }
-    };
-    let is_admin = is_admin(&session);
-
-    let pending_count = session.pending_writes.len();
     let locale = locale_from_headers(&headers);
+    let is_admin = is_admin(&session);
+    let account_uid = session.uid;
+
+    // Resolve the player UID on the currently selected server. If the account
+    // has never logged in there, keep the full shell so the pills stay usable.
+    let uid = resolve_player_uid(&active_state, account_uid);
+
     let server_host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
@@ -204,29 +203,93 @@ async fn dashboard(
     )
     .unwrap_or_else(|| "/dashboard".to_string());
 
+    // Presence (online/offline/unreachable) for each of the 6 servers, probed
+    // in parallel so the page never stalls on sequential UDP timeouts.
+    let mut per_server_uid: [Option<u32>; 6] = [None; 6];
+    let mut presences: [Presence; 6] = [Presence::Unreachable; 6];
+    {
+        let server_states: Vec<_> = [
+            ServerSelection { is_prod: false, server_num: 1 },
+            ServerSelection { is_prod: false, server_num: 2 },
+            ServerSelection { is_prod: false, server_num: 3 },
+            ServerSelection { is_prod: true, server_num: 1 },
+            ServerSelection { is_prod: true, server_num: 2 },
+            ServerSelection { is_prod: true, server_num: 3 },
+        ]
+        .into_iter()
+        .map(|sel| {
+            let s = state_for_selected_server(&state, sel);
+            (sel, s)
+        })
+        .collect::<Vec<_>>();
+
+        for (idx, (_sel, server_state)) in server_states.iter().enumerate() {
+            let player_uid = player_uid_for(server_state, account_uid);
+            per_server_uid[idx] = player_uid;
+        }
+
+        let results = std::thread::scope(|scope| {
+            let handles: Vec<_> = server_states
+                .iter()
+                .map(|(sel, server_state)| {
+                    let addr = server_state.ctl_addr.clone();
+                    let player_uid = per_server_uid[server_index(sel)];
+                    scope.spawn(move || {
+                        match player_uid {
+                            Some(puid) => ctl::presence_of(&addr, puid),
+                            None => Presence::Unreachable,
+                        }
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or(Presence::Unreachable))
+                .collect::<Vec<_>>()
+        });
+        presences.copy_from_slice(&results);
+    }
+
     // 6 server pills: Beta 1-3, Prod 1-3
     let mut server_pills = String::new();
-    for is_prod in [false, true] {
-        for num in 1..=3u32 {
-            let sel = ServerSelection {
-                is_prod,
-                server_num: num,
-            };
-            let target = if is_prod { "prod" } else { "beta" };
-            let href = format!(
-                "/switch-server?target={target}:{num}&next={}",
-                url_encode_component(&next)
-            );
-            let active_style = if sel == current_sel {
-                "background:#4c7dff;color:#fff;"
-            } else {
-                "background:#2a3140;color:#c7d1e0;"
-            };
+    for (idx, is_prod, num) in [(0usize, false, 1u32), (1, false, 2), (2, false, 3), (3, true, 1), (4, true, 2), (5, true, 3)] {
+        let sel = ServerSelection { is_prod, server_num: num };
+        let target = if is_prod { "prod" } else { "beta" };
+        let href = format!(
+            "/switch-server?target={target}:{num}&next={}",
+            url_encode_component(&next)
+        );
+        let is_selected = sel == current_sel;
+        let has_save = per_server_uid[idx].is_some();
+        let active_style = if is_selected {
+            "background:#4c7dff;color:#fff;"
+        } else {
+            "background:#2a3140;color:#c7d1e0;"
+        };
+        let dot = match (has_save, presences[idx]) {
+            (true, Presence::Online) => {
+                "<span style=\"display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:5px;\"></span>"
+            }
+            (true, Presence::Offline) => {
+                "<span style=\"display:inline-block;width:8px;height:8px;border-radius:50%;background:#9aa4b2;margin-right:5px;\"></span>"
+            }
+            (true, Presence::Unreachable) => {
+                "<span style=\"display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:5px;\"></span>"
+            }
+            _ => "",
+        };
+        if has_save {
             server_pills.push_str(&format!(
-                "<a href=\"{href}\" style=\"padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {active_style}\">{label}</a>",
+                "<a href=\"{href}\" style=\"padding:6px 10px; border-radius:999px; text-decoration:none; font-size:12px; font-weight:700; {active_style}\">{dot}{label}</a>",
                 href = href,
+                dot = dot,
                 label = sel.label(),
                 active_style = active_style,
+            ));
+        } else {
+            server_pills.push_str(&format!(
+                "<span style=\"padding:6px 10px; border-radius:999px; font-size:12px; font-weight:700; opacity:0.35; filter:grayscale(1); background:#2a3140; color:#c7d1e0; pointer-events:none;\">{label}</span>",
+                label = sel.label(),
             ));
         }
     }
@@ -305,7 +368,6 @@ async fn dashboard(
         .panel div button, .panel div form button, .panel div a {{ margin-top: 0; }}
         .row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
         .row > * {{ min-width: 0; }}
-    .apply {{ background: #22c55e; color: #0b1220; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
     .pill {{ display: inline-block; padding: 4px 8px; background: #2a3140; border-radius: 999px; font-size: 12px; color: #9aa4b2; }}
         .danger {{ background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
         .select-card {{ cursor: pointer; position: relative; }}
@@ -362,11 +424,7 @@ async fn dashboard(
         <div class="desktop-mode" style="display:flex; gap:4px; flex-wrap:wrap;">
             {server_pills}
         </div>
-        <a href="/logout" class="desktop-logout" style="padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
-        <form method="post" action="/apply" style="margin:0;">
-            <input type="hidden" name="session" value="{session_id}" />
-            <button class="apply" type="submit">{apply_changes} ({pending_count})</button>
-        </form>
+        <a href="/logout" class="desktop-logout" style="padding:6px 10px; border-radius:8px; background:#ef4444; color:#fff; text-decoration:none; font-size:12px; font-weight:700;">{logout_label}</a>
     </div>
 </header>
 <div class="mobile-overlay" onclick="this.classList.remove('open'); document.querySelector('.mobile-drawer').classList.remove('open');"></div>
@@ -382,7 +440,7 @@ async fn dashboard(
         <div style="display:flex; gap:4px; width:100%; flex-wrap:wrap;">
             {server_pills}
         </div>
-        <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#2a3140; color:#c7d1e0; text-decoration:none; font-size:12px; font-weight:600;">{logout_label}</a>
+        <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#ef4444; color:#fff; text-decoration:none; font-size:12px; font-weight:700;">{logout_label}</a>
     </div>
 </aside>
 <main class="content">
@@ -396,34 +454,47 @@ async fn dashboard(
         tab_weapons = tab_weapons,
         tab_discs = tab_discs,
         tab_status = tab_status,
-        content = match tab.as_str() {
-            "weapons" => render_weapon_cards(
-                &active_state,
-                uid,
-                locale,
-                &filter_weapon_class,
-                &filter_weapon_rarity
-            ),
-            "discs" => render_equip_cards(
-                &active_state,
-                uid,
-                delete_mode,
-                lock_mode,
-                locale,
-                filter_set_id,
-                filter_slot,
-                filter_main_stat,
-                query.status.as_deref(),
-                filter_page
-            ),
-
-            "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-            "status" => render_status_tab(&active_state, uid, locale, is_admin),
-            _ => render_avatar_cards(&active_state, uid, locale),
+        content = match uid {
+            None => {
+                format!(
+                    "<div class=\"panel\" style=\"display:block;\"><p class=\"meta\">{}</p></div>",
+                    t(locale, "player.not_found")
+                )
+            }
+            Some(uid) => {
+                let online = match presences[current_sel_index(current_sel)] {
+                    Presence::Online => true,
+                    _ => false,
+                };
+                match tab.as_str() {
+                    "weapons" => render_weapon_cards(
+                        &active_state,
+                        uid,
+                        locale,
+                        &filter_weapon_class,
+                        &filter_weapon_rarity,
+                        online,
+                    ),
+                    "discs" => render_equip_cards(
+                        &active_state,
+                        uid,
+                        delete_mode,
+                        lock_mode,
+                        locale,
+                        filter_set_id,
+                        filter_slot,
+                        filter_main_stat,
+                        query.status.as_deref(),
+                        filter_page,
+                        online,
+                    ),
+                    "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
+                    "status" => render_status_tab(&active_state, uid, locale, is_admin, online),
+                    _ => render_avatar_cards(&active_state, uid, locale),
+                }
+            }
         },
-        session_id = session_id,
         username = session.username,
-        pending_count = pending_count,
         server_pills = server_pills,
         lang_selector = lang_selector,
         lang_attr = locale.lang_attr(),
@@ -434,7 +505,6 @@ async fn dashboard(
         nav_client_updates = t(locale, "nav.client_updates"),
         nav_status = t(locale, "nav.status"),
         signed_in_as = t(locale, "header.signed_in_as"),
-        apply_changes = t(locale, "header.apply_changes"),
         logout_label = t(locale, "header.logout"),
     );
 
@@ -462,6 +532,22 @@ async fn set_language(
     response
 }
 
-fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool) -> String {
-    render_da_shiyu_status(state, uid, locale, is_admin)
+fn current_sel_index(sel: ServerSelection) -> usize {
+    server_index(&sel)
+}
+
+fn server_index(sel: &ServerSelection) -> usize {
+    match (sel.is_prod, sel.server_num) {
+        (false, 1) => 0,
+        (false, 2) => 1,
+        (false, 3) => 2,
+        (true, 1) => 3,
+        (true, 2) => 4,
+        (true, 3) => 5,
+        _ => 0,
+    }
+}
+
+fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool, _online: bool) -> String {
+    render_da_shiyu_status(state, uid, locale, is_admin, _online)
 }
