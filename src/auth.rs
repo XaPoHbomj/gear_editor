@@ -30,15 +30,31 @@ pub(crate) struct Session {
 
 /// Convert a bcrypt PHC-format hash (`$bcrypt$r=<cost>$<salt>$<hash>`) to the
 /// crypt format (`$2b$<cost>$<salt>$<hash>`) used by the `bcrypt` crate.
-/// The Zig sdksv stores hashes in PHC encoding; salt and hash use the same
-/// base64 alphabet in both formats.
+///
+/// The Zig sdksv stores hashes in PHC encoding. PHC base64 uses the standard
+/// alphabet (`A-Za-z0-9+/`), while the bcrypt crypt format uses its own custom
+/// alphabet (`./A-Za-z0-9`), so the salt and hash bytes must be decoded and
+/// re-encoded, not copied verbatim.
 fn bcrypt_phc_to_crypt(hash: &str) -> Option<String> {
+    use base64::Engine;
+
     let parts: Vec<&str> = hash.split('$').collect();
-    if parts.len() == 5 && parts[1] == "bcrypt" {
-        let cost = parts[2].strip_prefix("r=")?;
-        return Some(format!("$2b${cost}${}${}", parts[3], parts[4]));
+    if parts.len() != 5 || parts[1] != "bcrypt" {
+        return None;
     }
-    None
+    let cost = parts[2].strip_prefix("r=")?;
+
+    let std_engine = base64::engine::general_purpose::STANDARD_NO_PAD;
+    let salt = std_engine.decode(parts[3]).ok()?;
+    let digest = std_engine.decode(parts[4]).ok()?;
+
+    let bcrypt_engine = bcrypt::BASE_64;
+    let salt_b64 = bcrypt_engine.encode(&salt);
+    let hash_b64 = bcrypt_engine.encode(&digest);
+
+    // Crypt format: `$2b$<cost>$<salt><hash>` — salt and hash are concatenated
+    // into a single 53-character field (22 + 31).
+    Some(format!("$2b${cost}${salt_b64}{hash_b64}"))
 }
 
 fn bcrypt_verify(password: &str, hash: &str) -> bool {
@@ -211,7 +227,7 @@ mod tests {
         let crypt = bcrypt_phc_to_crypt(phc).unwrap();
         assert_eq!(
             crypt,
-            "$2b$10$R6AHU4r621sHG5E6Fn3amA$aZVxJf9uxTEyg0sjgbu7pSjrlZGhn1U"
+            "$2b$10$P4.FS2p40zqFE3C4Dl1Yk.YXTvHd7svRCweyqheZs5nQhpjXEflzS"
         );
     }
 
@@ -220,6 +236,19 @@ mod tests {
         let crypt = "$2b$10$R6AHU4r621sHG5E6Fn3amA$aZVxJf9uxTEyg0sjgbu7pSjrlZGhn1U";
         assert!(bcrypt_phc_to_crypt(crypt).is_none());
         assert!(!bcrypt_verify("wrong", crypt));
+    }
+
+    #[test]
+    fn verifies_phc_format_hash() {
+        // Real PHC-format hash (as produced by the Zig sdksv) for password "testpass123"
+        let phc = "$bcrypt$r=10$wJKSVUxVZN6FABWNNaM0Cg$k1ZnHB+XCkm0WgLBvfwytNTZkxqjFPY";
+        let crypt = bcrypt_phc_to_crypt(phc).unwrap();
+        assert_eq!(
+            crypt,
+            "$2b$10$uHIQTSvTXL4D./ULLYKyAeizXlF/8VAikyUeJ/tduwrLRXivohDNW"
+        );
+        assert!(bcrypt_verify("testpass123", phc));
+        assert!(!bcrypt_verify("wrong", phc));
     }
 }
 
