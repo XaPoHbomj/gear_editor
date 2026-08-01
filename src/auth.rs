@@ -28,6 +28,27 @@ pub(crate) struct Session {
     pub(crate) last_active: Instant,
 }
 
+/// Convert a bcrypt PHC-format hash (`$bcrypt$r=<cost>$<salt>$<hash>`) to the
+/// crypt format (`$2b$<cost>$<salt>$<hash>`) used by the `bcrypt` crate.
+/// The Zig sdksv stores hashes in PHC encoding; salt and hash use the same
+/// base64 alphabet in both formats.
+fn bcrypt_phc_to_crypt(hash: &str) -> Option<String> {
+    let parts: Vec<&str> = hash.split('$').collect();
+    if parts.len() == 5 && parts[1] == "bcrypt" {
+        let cost = parts[2].strip_prefix("r=")?;
+        return Some(format!("$2b${cost}${}${}", parts[3], parts[4]));
+    }
+    None
+}
+
+fn bcrypt_verify(password: &str, hash: &str) -> bool {
+    if let Some(crypt_hash) = bcrypt_phc_to_crypt(hash) {
+        bcrypt::verify(password, &crypt_hash).unwrap_or(false)
+    } else {
+        bcrypt::verify(password, hash).unwrap_or(false)
+    }
+}
+
 pub(crate) fn validate_login(
     state: &AppState,
     username: &str,
@@ -67,7 +88,7 @@ pub(crate) fn validate_login(
             .min(257);
         let hash_str = std::str::from_utf8(&data[pos..pos + hash_end]).unwrap_or("");
         if names[i] == username {
-            if !hash_str.is_empty() && bcrypt::verify(password, hash_str).unwrap_or(false) {
+            if !hash_str.is_empty() && bcrypt_verify(password, hash_str) {
                 found_uid = Some(i as i32 + 1);
             }
             break;
@@ -179,3 +200,26 @@ pub(crate) fn remove_session(session_id: &str) {
 pub(crate) fn is_admin(session: &Session) -> bool {
     session.username == ADMIN_LOGIN
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn converts_phc_bcrypt_to_crypt_format() {
+        let phc = "$bcrypt$r=10$R6AHU4r621sHG5E6Fn3amA$aZVxJf9uxTEyg0sjgbu7pSjrlZGhn1U";
+        let crypt = bcrypt_phc_to_crypt(phc).unwrap();
+        assert_eq!(
+            crypt,
+            "$2b$10$R6AHU4r621sHG5E6Fn3amA$aZVxJf9uxTEyg0sjgbu7pSjrlZGhn1U"
+        );
+    }
+
+    #[test]
+    fn leaves_crypt_format_untouched() {
+        let crypt = "$2b$10$R6AHU4r621sHG5E6Fn3amA$aZVxJf9uxTEyg0sjgbu7pSjrlZGhn1U";
+        assert!(bcrypt_phc_to_crypt(crypt).is_none());
+        assert!(!bcrypt_verify("wrong", crypt));
+    }
+}
+
