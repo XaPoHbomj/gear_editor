@@ -19,6 +19,7 @@ mod i18n;
 mod player_state;
 mod remielle_save;
 mod routes;
+mod sdk;
 mod updates;
 mod utils;
 mod zon;
@@ -32,12 +33,12 @@ use ctl::Presence;
 use i18n::{Locale, locale_from_headers, t};
 use player_state::{player_uid_for, resolve_player_uid};
 use routes::admin::{admin_delete_update, admin_update_hadal_zone, admin_upload_update};
-use routes::auth::{login, login_page, logout, switch_server};
+use routes::auth::{login, login_page, logout, register, register_page, switch_server};
 use routes::avatar::{avatar_edit, avatar_update, render_avatar_cards};
 use routes::challenges::{da_detail, render_da_shiyu_status, shiyu_detail};
 use routes::equip::{
     equip_add, equip_delete_all_unlocked, equip_delete_submit, equip_edit, equip_generate,
-    equip_generate_submit, equip_lock_selected, equip_new, equip_update, render_equip_cards,
+    equip_generate_submit, equip_new, equip_update, render_equip_cards,
 };
 use routes::weapon::{render_weapon_cards, weapon_add, weapon_edit, weapon_new, weapon_update};
 use updates::render_client_updates_panel;
@@ -46,11 +47,9 @@ use updates::render_client_updates_panel;
 struct TabQuery {
     tab: Option<String>,
     delete: Option<u8>,
-    lock: Option<u8>,
     set_id: Option<String>,
     slot: Option<String>,
     main_stat: Option<String>,
-    status: Option<String>,
     page: Option<String>,
     weapon_class: Option<String>,
     weapon_rarity: Option<String>,
@@ -109,6 +108,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(login_page))
         .route("/login", post(login))
+        .route("/register", get(register_page).post(register))
         .route("/dashboard", get(dashboard))
         .route("/switch-server", get(switch_server))
         .route("/logout", get(logout))
@@ -126,7 +126,6 @@ async fn main() {
             "/equip/delete-all-unlocked",
             post(equip_delete_all_unlocked),
         )
-        .route("/equip/lock-selected", post(equip_lock_selected))
         .route(
             "/admin/upload-update",
             post(admin_upload_update).layer(DefaultBodyLimit::disable()),
@@ -171,7 +170,6 @@ async fn dashboard(
 
     let tab = query.tab.unwrap_or_else(|| "avatars".to_string());
     let delete_mode = query.delete.unwrap_or(0) == 1;
-    let lock_mode = query.lock.unwrap_or(0) == 1;
     let filter_set_id = query.set_id.and_then(|s| s.parse::<u32>().ok());
     let filter_slot = query.slot.and_then(|s| s.parse::<u32>().ok());
     let filter_main_stat = query.main_stat.and_then(|s| s.parse::<u32>().ok());
@@ -372,14 +370,10 @@ async fn dashboard(
         .danger {{ background: #ef4444; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }}
         .select-card {{ cursor: pointer; position: relative; }}
         .select-card input[type="checkbox"] {{ position: absolute; opacity: 0; pointer-events: none; }}
-        .select-card.locked {{ opacity: 0.5; cursor: not-allowed; }}
         .select-card .selection-outline {{ display: none; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; }}
         .delete-form .select-card .selection-outline {{ border: 2px solid #ef4444; box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.18); }}
-        .lock-form .select-card .selection-outline {{ border: 2px solid #22c55e; box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.18); }}
         .delete-form .select-card input:checked ~ .selection-outline {{ display: block; }}
-        .lock-form .select-card input:checked ~ .selection-outline {{ display: block; }}
         .delete-form .select-card:has(input:checked) {{ border-color: #ef4444; }}
-        .lock-form .select-card:has(input:checked) {{ border-color: #22c55e; }}
         .mobile-overlay {{ display: none; }}
         .mobile-drawer {{ display: none; }}
     @media (max-width: 768px) {{
@@ -466,6 +460,7 @@ async fn dashboard(
                     Presence::Online => true,
                     _ => false,
                 };
+                let server_up = ctl::server_reachable(&active_state.ctl_addr);
                 match tab.as_str() {
                     "weapons" => render_weapon_cards(
                         &active_state,
@@ -479,17 +474,15 @@ async fn dashboard(
                         &active_state,
                         uid,
                         delete_mode,
-                        lock_mode,
                         locale,
                         filter_set_id,
                         filter_slot,
                         filter_main_stat,
-                        query.status.as_deref(),
                         filter_page,
                         online,
                     ),
                     "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-                    "status" => render_status_tab(&active_state, uid, locale, is_admin, online),
+                    "status" => render_status_tab(&active_state, uid, locale, is_admin, server_up),
                     _ => render_avatar_cards(&active_state, uid, locale),
                 }
             }
@@ -548,6 +541,6 @@ fn server_index(sel: &ServerSelection) -> usize {
     }
 }
 
-fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool, _online: bool) -> String {
-    render_da_shiyu_status(state, uid, locale, is_admin, _online)
+fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool, server_up: bool) -> String {
+    render_da_shiyu_status(state, uid, locale, is_admin, server_up)
 }

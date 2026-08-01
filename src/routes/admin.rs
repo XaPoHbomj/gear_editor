@@ -55,10 +55,7 @@ pub(crate) async fn admin_update_hadal_zone(
         state_for_selected_server(&state, crate::app_state::active_server_selection(&headers));
     let addr = active_state.ctl_addr.clone();
 
-    let Some(uid) = crate::player_state::player_uid_for(&active_state, session.uid) else {
-        return Html(t(locale_from_headers(&headers), "player.not_found")).into_response();
-    };
-    if !ctl::player_is_online(&addr, uid) {
+    if !ctl::server_reachable(&addr) {
         return Html(t(locale_from_headers(&headers), "player.offline")).into_response();
     }
 

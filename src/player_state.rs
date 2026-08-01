@@ -4,21 +4,12 @@ use crate::{
     i18n::{Locale, t},
     remielle_save::{self, PlayerSave},
 };
-use std::{
-    fs,
-    path::{Path as FsPath, PathBuf},
-};
+use std::fs;
 
 pub(crate) fn load_player_save(state: &AppState, uid: u32) -> Option<PlayerSave> {
     let path = state.state_dir.join(format!("USD_{uid}.bin"));
     let data = fs::read(&path).ok()?;
     remielle_save::decode_player_save(&data)
-}
-
-pub(crate) fn save_player_save(state: &AppState, uid: u32, save: &PlayerSave) {
-    let path = state.state_dir.join(format!("USD_{uid}.bin"));
-    let data = remielle_save::encode_player_save(save);
-    let _ = fs::write(&path, &data);
 }
 
 pub(crate) fn render_stat_select_options(
@@ -209,18 +200,4 @@ pub(crate) fn player_uid_for(state: &AppState, account_uid: i32) -> Option<u32> 
 
 pub(crate) fn resolve_player_uid(state: &AppState, account_uid: i32) -> Option<u32> {
     player_uid_for(state, account_uid)
-}
-
-pub(crate) fn resolve_item_path(state_dir: &FsPath, uid: u32, kind: &str, item_id: u32) -> PathBuf {
-    let base = state_dir.join(format!("player/{uid}/{kind}/{item_id}"));
-    if base.exists() {
-        return base;
-    }
-
-    let zon = state_dir.join(format!("player/{uid}/{kind}/{item_id}.zon"));
-    if zon.exists() {
-        return zon;
-    }
-
-    base
 }

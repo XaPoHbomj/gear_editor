@@ -1,13 +1,12 @@
 use crate::{
     app_state::AppState,
-    auth::{get_session, html_escape_text, redirect_to_login},
+    auth::html_escape_text,
     i18n::{Locale, locale_from_headers, t},
-    player_state::resolve_player_uid,
 };
 use axum::{
-    extract::{OriginalUri, Path, Query, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse},
 };
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -73,23 +72,6 @@ fn da_rotation_from_id(id: u32) -> u32 {
         s[2..5].parse::<u32>().unwrap_or(0)
     } else {
         0
-    }
-}
-
-fn da_mode_label(locale: Locale, id: u32) -> String {
-    let s = id.to_string();
-    if s.len() < 6 {
-        return t(locale, "da.mode_normal").to_string();
-    }
-    let rotation = da_rotation_from_id(id);
-    if rotation < 42 {
-        return t(locale, "da.mode_normal").to_string();
-    }
-    let mode_digit = s.chars().nth(5).and_then(|c| c.to_digit(10)).unwrap_or(0);
-    if mode_digit == 2 {
-        t(locale, "da.mode_hardcore").to_string()
-    } else {
-        t(locale, "da.mode_normal").to_string()
     }
 }
 
@@ -238,39 +220,6 @@ fn shiyu_stage_zones(shiyu_data: &JsonValue, floor: u32) -> Vec<(u32, JsonValue)
         .unwrap_or_default();
     zones.sort_by_key(|(zone_id, _)| *zone_id);
     zones
-}
-
-fn shiyu_floor_boss_names(zones: &[(u32, JsonValue)]) -> Vec<String> {
-    let mut names = Vec::new();
-    for (_, zone) in zones {
-        let Some(rooms) = zone.get("layer_room").and_then(|r| r.as_object()) else {
-            continue;
-        };
-        for room in rooms.values() {
-            let Some(monsters) = room.get("monster_list").and_then(|m| m.as_object()) else {
-                continue;
-            };
-            let mut top_boss: Option<(&str, f64)> = None;
-            for monster in monsters.values() {
-                let name = monster
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_else(|| "Unknown");
-                let hp = monster
-                    .get("stats")
-                    .and_then(|s| s.get("hp"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                if top_boss.map(|(_, best_hp)| hp > best_hp).unwrap_or(true) {
-                    top_boss = Some((name, hp));
-                }
-            }
-            if let Some((name, _)) = top_boss {
-                names.push(name.to_string());
-            }
-        }
-    }
-    names
 }
 
 fn shiyu_render_monster_card(
@@ -471,7 +420,7 @@ pub(crate) fn render_da_shiyu_status(
     _uid: u32,
     locale: Locale,
     is_admin: bool,
-    online: bool,
+    server_up: bool,
 ) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
@@ -510,7 +459,7 @@ pub(crate) fn render_da_shiyu_status(
             1,
             "hadal_zone_scheduled",
             is_admin,
-            online,
+            server_up,
         ),
         render_status_card(
             locale,
@@ -522,7 +471,7 @@ pub(crate) fn render_da_shiyu_status(
             1,
             "boss_challenge_normal",
             is_admin,
-            online,
+            server_up,
         ),
         render_status_card(
             locale,
@@ -534,45 +483,31 @@ pub(crate) fn render_da_shiyu_status(
             1,
             "boss_challenge_hard",
             is_admin,
-            online,
+            server_up,
         ),
     ));
 
     out
 }
 
-fn extract_entrance_zone(config: &str, entrance_name: &str) -> u32 {
-    let prefix = format!(".{}", entrance_name);
-    if let Some(pos) = config.find(&prefix) {
-        let after = &config[pos + prefix.len()..];
-        if let Some(zone_pos) = after.find(".zone = ") {
-            let num_start = zone_pos + ".zone = ".len();
-            let rest = &after[num_start..];
-            let mut num_str = String::new();
-            for c in rest.chars() {
-                if c.is_ascii_digit() {
-                    num_str.push(c);
-                } else {
-                    break;
-                }
-            }
-            return num_str.parse::<u32>().unwrap_or(0);
-        }
-    }
-    0
-}
-
-fn render_hadal_edit_form(server: u32, hadal_id: &str, locale: Locale) -> String {
+fn render_hadal_edit_form(server: u32, hadal_id: &str, locale: Locale, server_up: bool) -> String {
+    let disabled = if server_up { "" } else { " disabled" };
     format!(
-        r#"<form method="post" action="/admin/update-hadal-zone" style="margin-top:10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        r#"<form method="post" action="/admin/update-hadal-zone" style="margin-top:10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;{dim}">
             <input type="hidden" name="server" value="{server}">
             <input type="hidden" name="hadal_id" value="{hadal_id}">
-            <input type="number" name="new_zone" placeholder="New ID" required style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
-            <button type="submit" style="padding:5px 10px; border:0; border-radius:6px; background:#4c7dff; color:#fff; font-weight:600; font-size:12px; cursor:pointer;">{update_label}</button>
+            <input type="number" name="new_zone" placeholder="New ID" required{disabled} style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
+            <button type="submit" disabled{disabled} style="padding:5px 10px; border:0; border-radius:6px; background:#4c7dff; color:#fff; font-weight:600; font-size:12px; cursor:pointer;">{update_label}</button>
         </form>"#,
         server = server,
         hadal_id = hadal_id,
         update_label = t(locale, "status.update_zone"),
+        disabled = disabled,
+        dim = if server_up {
+            ""
+        } else {
+            " opacity:0.5;"
+        },
     )
 }
 
@@ -586,10 +521,10 @@ fn render_status_card(
     server: u32,
     hadal_id: &str,
     is_admin: bool,
-    online: bool,
+    server_up: bool,
 ) -> String {
-    let admin_form = if is_admin && online {
-        render_hadal_edit_form(server, hadal_id, locale)
+    let admin_form = if is_admin {
+        render_hadal_edit_form(server, hadal_id, locale, server_up)
     } else {
         String::new()
     };

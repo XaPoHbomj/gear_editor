@@ -24,6 +24,7 @@ gear_editor/
     ├── main.rs         # Router, dashboard HTML with inline CSS
     ├── app_state.rs    # AppState, ServerSelection (beta/prod + server_num), cookie parsing, per-server dirs/ports/base_uid
     ├── auth.rs         # Session store, login via bcrypt from remielle SDK/passwd
+    ├── sdk.rs          # Account registration: RSA-1024 encrypt + POST to sdksv login endpoint
     ├── assets.rs       # Static file serving from zzz_dump/assets/
     ├── ctl.rs          # UDP control protocol client (modAvatarMeta, createWeapon, modEquip, etc.)
     ├── i18n.rs         # 5-locale translation table (EN, RU, CN, KR, JP)
@@ -36,7 +37,7 @@ gear_editor/
     │   ├── hakushin.rs # Hakushin.gg dump: char/weapon/disc/bangboo names+images
     │   └── templates.rs# Template JSON via zon_parse_entries (ZON format)
     └── routes/
-        ├── auth.rs     # Login page + switch-server (cookie beta:N/prod:N)
+        ├── auth.rs     # Login page + register + switch-server (cookie beta:N/prod:N)
         ├── avatar.rs   # Character edit/update/cards (ctl modAvatarMeta)
         ├── weapon.rs   # Weapon edit/new/update (ctl create/modWeapon)
         ├── equip.rs    # Disc edit/new/generate/delete (ctl create/modEquip)

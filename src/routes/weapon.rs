@@ -2,10 +2,7 @@ use crate::{
     app_state::{AppState, state_with_active_server},
     auth::{get_session, html_escape_attr, redirect_to_login},
     ctl,
-    data::{
-        hakushin::{load_hakushin_data, to_asset_url},
-        templates::load_weapon_templates,
-    },
+    data::hakushin::{load_hakushin_data, to_asset_url},
     i18n::{Locale, locale_from_headers, t},
     player_state::{load_player_save, resolve_player_uid},
     utils::{audit_log, shared_page_css, svg_data_uri},
@@ -328,7 +325,6 @@ pub(crate) fn render_weapon_cards(
     filter_rarity: &str,
     online: bool,
 ) -> String {
-    let weapon_templates = load_weapon_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
 
     let mut cards = String::new();
@@ -360,7 +356,6 @@ pub(crate) fn render_weapon_cards(
                 .weapons
                 .get(&weapon_id)
                 .map(|entry| entry.name.clone())
-                .or_else(|| weapon_templates.get(&weapon_id).cloned())
                 .unwrap_or_else(|| format!("{} {weapon_id}", t(locale, "fallback.weapon")));
 
             let img = hakushin

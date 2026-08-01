@@ -152,16 +152,6 @@ pub fn mod_weapon(
     send_and_ack(addr, &buf[..p])
 }
 
-pub fn delete_weapon(addr: &str, player_uid: u32, weapon_uid_in_save: u32) -> Result<(), String> {
-    // header(8) + player_uid(4) + weapon_uid(4) = 16
-    let mut buf = [0u8; 16];
-    buf[..HEADER_SIZE].copy_from_slice(&make_header(8, 0));
-    let mut p = HEADER_SIZE;
-    write_u32_le(&mut buf, &mut p, player_uid);
-    write_u32_le(&mut buf, &mut p, WEAPON_UID_BASE + weapon_uid_in_save);
-    send_and_ack(addr, &buf[..p])
-}
-
 pub fn create_equip(
     addr: &str,
     player_uid: u32,
@@ -317,6 +307,28 @@ pub fn presence_of(addr: &str, player_uid: u32) -> Presence {
     store_presence(addr, player_uid, presence);
     presence
 }
+
+/// Whether the server process is reachable on its ctl port (responds within
+/// the probe timeout). Used to gate admin-only server-wide operations that do
+/// not depend on a specific player being online (e.g. hadal zone edits).
+pub fn server_reachable(addr: &str) -> bool {
+    let cache = SERVER_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((reachable, at)) = cache.lock().unwrap().get(addr).map(|(r, a)| (*r, *a)) {
+        if at.elapsed() < PROBE_CACHE_TTL {
+            return reachable;
+        }
+    }
+    // Probe with a synthetic player_uid (0) that the server will never have in
+    // its uid_map; a reply of any kind means the server is up, silence means down.
+    let reachable = probe_presence(addr, 0) != Presence::Unreachable;
+    cache
+        .lock()
+        .unwrap()
+        .insert(addr.to_string(), (reachable, Instant::now()));
+    reachable
+}
+
+static SERVER_CACHE: OnceLock<Mutex<HashMap<String, (bool, Instant)>>> = OnceLock::new();
 
 #[cfg(test)]
 mod tests {

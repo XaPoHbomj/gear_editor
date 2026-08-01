@@ -6,6 +6,7 @@ use crate::{
         remove_session, sanitize_next_path, url_encode_component, validate_login,
     },
     i18n::{Locale, locale_from_headers, t},
+    sdk,
     utils::audit_log,
 };
 use axum::{
@@ -97,6 +98,9 @@ fn render_login_form(locale: Locale, next: &str, error: Option<&str>) -> String 
             <input id="password" name="password" type="password" autocomplete="current-password" required />
         </div>
     <button type="submit">{sign_in}</button>
+    <div style="text-align:center;">
+      <a href="/register?next={next_attr}" style="color:#9aa4b2; font-size:12px; text-decoration:none;">{register_link}</a>
+    </div>
   </form>
 </body>
 </html>"#,
@@ -106,6 +110,87 @@ fn render_login_form(locale: Locale, next: &str, error: Option<&str>) -> String 
         username_label = t(locale, "login.username"),
         password_label = t(locale, "login.password"),
         sign_in = t(locale, "login.sign_in"),
+        register_link = t(locale, "login.register"),
+        lang = locale.lang_attr(),
+    )
+}
+
+pub(crate) async fn register_page(
+    Query(query): Query<LoginQuery>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if get_session(&headers).is_some() {
+        return Redirect::to("/dashboard").into_response();
+    }
+
+    let locale = locale_from_headers(&headers);
+    let next = query
+        .next
+        .as_deref()
+        .and_then(sanitize_next_path)
+        .unwrap_or_else(|| "/dashboard".to_string());
+    let error = query.error.as_deref().filter(|e| !e.is_empty());
+    Html(render_register_form(locale, &next, error)).into_response()
+}
+
+fn render_register_form(locale: Locale, next: &str, error: Option<&str>) -> String {
+    let next_attr = html_escape_attr(next);
+    let error_html = match error {
+        Some(msg) => format!(
+            "<div style=\"background:#3d1420;color:#fca5a5;border:1px solid #6b2136;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:0;\">{}</div>",
+            html_escape_text(t(locale, msg))
+        ),
+        None => String::new(),
+    };
+
+    format!(
+        r#"<!doctype html>
+<html lang="{lang}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <style>
+        body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; margin: 0; }}
+        form {{ background: #1b1f2a; padding: 24px; border-radius: 12px; width: 320px; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 12px; }}
+    h1 {{ font-size: 18px; margin: 0; }}
+    .field {{ display: flex; flex-direction: column; gap: 6px; }}
+    label {{ display: block; margin: 0; font-size: 12px; color: #9aa4b2; }}
+    input {{ width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #2a3140; background: #121620; color: #e6e6e6; }}
+    button {{ width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #4c7dff; color: #fff; font-weight: 600; cursor: pointer; }}
+        @media (max-width: 768px) {{
+            body {{ display: flex; align-items: center; justify-content: center; height: auto; min-height: 100vh; min-height: 100dvh; padding: 16px; box-sizing: border-box; }}
+            form {{ width: 100%; max-width: 420px; margin: 0; box-sizing: border-box; }}
+        }}
+  </style>
+</head>
+<body>
+  <form method="post" action="/register">
+    <h1>{title}</h1>
+        {error}
+        <input type="hidden" name="next" value="{next_attr}" />
+        <div class="field">
+            <label for="reg-username">{username_label}</label>
+            <input id="reg-username" name="username" autocomplete="username" required />
+        </div>
+        <div class="field">
+            <label for="reg-password">{password_label}</label>
+            <input id="reg-password" name="password" type="password" autocomplete="new-password" required />
+        </div>
+    <button type="submit">{register_submit}</button>
+    <div style="text-align:center;">
+      <a href="/?next={next_attr}" style="color:#9aa4b2; font-size:12px; text-decoration:none;">{back_to_login}</a>
+    </div>
+  </form>
+</body>
+</html>"#,
+        error = error_html,
+        next_attr = next_attr,
+        title = t(locale, "login.register_title"),
+        username_label = t(locale, "login.username"),
+        password_label = t(locale, "login.password"),
+        register_submit = t(locale, "login.register_submit"),
+        back_to_login = t(locale, "login.back_to_login"),
         lang = locale.lang_attr(),
     )
 }
@@ -171,6 +256,41 @@ pub(crate) async fn login(
     };
 
     response
+}
+
+pub(crate) async fn register(
+    State(state): State<AppState>,
+    _headers: HeaderMap,
+    Form(payload): Form<LoginForm>,
+) -> impl IntoResponse {
+    let username = payload.username.trim().to_string();
+    let next = payload
+        .next
+        .as_deref()
+        .and_then(sanitize_next_path)
+        .unwrap_or_else(|| "/dashboard".to_string());
+
+    if username.is_empty() || payload.password.is_empty() {
+        return redirect_with_error(&next, "login.register_invalid");
+    }
+
+    match sdk::register_account(&username, &payload.password).await {
+        Ok(true) => {
+            audit_log(&state.root_dir, &username, 0, "register", "account created");
+            Redirect::to(&next).into_response()
+        }
+        Ok(false) => redirect_with_error(&next, "login.invalid_credentials"),
+        Err(_) => redirect_with_error(&next, "login.failed"),
+    }
+}
+
+fn redirect_with_error(next: &str, error_key: &str) -> Response {
+    let location = format!(
+        "/?next={}&error={}",
+        url_encode_component(next),
+        url_encode_component(error_key)
+    );
+    Redirect::to(&location).into_response()
 }
 
 pub(crate) async fn switch_server(

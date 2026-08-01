@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PlayerSave {
     pub(crate) basic: Option<BasicSave>,
@@ -127,35 +125,6 @@ pub(crate) fn decode_player_save(buf: &[u8]) -> Option<PlayerSave> {
     Some(save)
 }
 
-pub(crate) fn encode_player_save(save: &PlayerSave) -> Vec<u8> {
-    let mut buf = Vec::new();
-    if let Some(ref basic) = save.basic {
-        let inner = encode_basic_save(basic);
-        encode_ld(&mut buf, 1, &inner);
-    }
-    if !save.avatar.is_empty() {
-        let inner = encode_avatar_save_list(&save.avatar);
-        encode_ld(&mut buf, 2, &inner);
-    }
-    if !save.weapon.is_empty() {
-        let inner = encode_weapon_save_list(&save.weapon);
-        encode_ld(&mut buf, 3, &inner);
-    }
-    if !save.equip.is_empty() {
-        let inner = encode_equip_save_list(&save.equip);
-        encode_ld(&mut buf, 4, &inner);
-    }
-    if !save.buddy.is_empty() {
-        let inner = encode_buddy_save_list(&save.buddy);
-        encode_ld(&mut buf, 5, &inner);
-    }
-    if let Some(ref hall) = save.hall {
-        let inner = encode_hall_save(hall);
-        encode_ld(&mut buf, 6, &inner);
-    }
-    buf
-}
-
 fn decode_basic_save(buf: &[u8]) -> BasicSave {
     let mut basic = BasicSave::default();
     let mut pos = 0;
@@ -196,15 +165,6 @@ fn decode_basic_save(buf: &[u8]) -> BasicSave {
         }
     }
     basic
-}
-
-fn encode_basic_save(save: &BasicSave) -> Vec<u8> {
-    let mut buf = Vec::new();
-    encode_varint_field(&mut buf, 1, save.level as u64);
-    encode_varint_field(&mut buf, 2, save.avatar_id as u64);
-    encode_varint_field(&mut buf, 3, save.control_avatar_id as u64);
-    encode_varint_field(&mut buf, 4, save.control_guise_avatar_id as u64);
-    buf
 }
 
 fn decode_avatar_save(buf: &[u8]) -> AvatarItemSave {
@@ -314,40 +274,6 @@ fn decode_avatar_save(buf: &[u8]) -> AvatarItemSave {
     item
 }
 
-fn encode_avatar_save(item: &AvatarItemSave) -> Vec<u8> {
-    let mut buf = Vec::new();
-    encode_varint_field(&mut buf, 1, item.id as u64);
-    encode_varint_field(&mut buf, 2, item.level as u64);
-    encode_varint_field(&mut buf, 3, item.exp as u64);
-    encode_varint_field(&mut buf, 4, item.rank as u64);
-    encode_varint_field(&mut buf, 5, item.talents as u64);
-    encode_varint_field(&mut buf, 6, item.talent_switch as u64);
-    encode_varint_field(&mut buf, 7, item.favorite as u64);
-    if !item.skill_levels.is_empty() {
-        let sk_buf: Vec<u8> = item
-            .skill_levels
-            .iter()
-            .flat_map(|v| encode_varint(*v as u64))
-            .collect();
-        encode_ld(&mut buf, 8, &sk_buf);
-    }
-    encode_varint_field(&mut buf, 9, item.skin_id as u64);
-    encode_varint_field(&mut buf, 10, item.weapon_uid as u64);
-    if !item.equipment_uids.is_empty() {
-        let eq_buf: Vec<u8> = item
-            .equipment_uids
-            .iter()
-            .flat_map(|v| encode_varint(*v as u64))
-            .collect();
-        encode_ld(&mut buf, 11, &eq_buf);
-    }
-    encode_varint_field(&mut buf, 12, item.awake_available as u64);
-    encode_varint_field(&mut buf, 13, item.awake_enabled as u64);
-    encode_varint_field(&mut buf, 14, item.awake_id as u64);
-    encode_varint_field(&mut buf, 15, item.awake_material_count as u64);
-    buf
-}
-
 fn decode_avatar_save_list(buf: &[u8]) -> Vec<AvatarItemSave> {
     let mut items = Vec::new();
     let mut pos = 0;
@@ -368,15 +294,6 @@ fn decode_avatar_save_list(buf: &[u8]) -> Vec<AvatarItemSave> {
         }
     }
     items
-}
-
-fn encode_avatar_save_list(items: &[AvatarItemSave]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    for item in items {
-        let inner = encode_avatar_save(item);
-        encode_ld(&mut buf, 1, &inner);
-    }
-    buf
 }
 
 fn decode_weapon_save(buf: &[u8]) -> WeaponItemSave {
@@ -410,16 +327,6 @@ fn decode_weapon_save(buf: &[u8]) -> WeaponItemSave {
     item
 }
 
-fn encode_weapon_save(item: &WeaponItemSave) -> Vec<u8> {
-    let mut buf = Vec::new();
-    encode_varint_field(&mut buf, 1, item.uid as u64);
-    encode_varint_field(&mut buf, 2, item.id as u64);
-    encode_varint_field(&mut buf, 3, item.level as u64);
-    encode_varint_field(&mut buf, 4, item.star as u64);
-    encode_varint_field(&mut buf, 5, item.refine as u64);
-    buf
-}
-
 fn decode_weapon_save_list(buf: &[u8]) -> Vec<WeaponItemSave> {
     let mut items = Vec::new();
     let mut pos = 0;
@@ -440,15 +347,6 @@ fn decode_weapon_save_list(buf: &[u8]) -> Vec<WeaponItemSave> {
         }
     }
     items
-}
-
-fn encode_weapon_save_list(items: &[WeaponItemSave]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    for item in items {
-        let inner = encode_weapon_save(item);
-        encode_ld(&mut buf, 1, &inner);
-    }
-    buf
 }
 
 fn decode_equip_property(buf: &[u8]) -> EquipProperty {
@@ -478,14 +376,6 @@ fn decode_equip_property(buf: &[u8]) -> EquipProperty {
         }
     }
     prop
-}
-
-fn encode_equip_property(prop: &EquipProperty) -> Vec<u8> {
-    let mut buf = Vec::new();
-    encode_varint_field(&mut buf, 1, prop.key as u64);
-    encode_varint_field(&mut buf, 2, prop.base_value as u64);
-    encode_varint_field(&mut buf, 3, prop.add_value as u64);
-    buf
 }
 
 fn decode_equip_save(buf: &[u8]) -> EquipItemSave {
@@ -563,23 +453,6 @@ fn decode_equip_properties_list(buf: &[u8]) -> Vec<EquipProperty> {
     props
 }
 
-fn encode_equip_save(item: &EquipItemSave) -> Vec<u8> {
-    let mut buf = Vec::new();
-    encode_varint_field(&mut buf, 1, item.uid as u64);
-    encode_varint_field(&mut buf, 2, item.id as u64);
-    encode_varint_field(&mut buf, 3, item.level as u64);
-    encode_varint_field(&mut buf, 4, item.star as u64);
-    if !item.properties.is_empty() {
-        let mut props_buf = Vec::new();
-        for prop in &item.properties {
-            let inner = encode_equip_property(prop);
-            encode_ld(&mut props_buf, 0, &inner);
-        }
-        encode_ld(&mut buf, 5, &props_buf);
-    }
-    buf
-}
-
 fn decode_equip_save_list(buf: &[u8]) -> Vec<EquipItemSave> {
     let mut items = Vec::new();
     let mut pos = 0;
@@ -600,15 +473,6 @@ fn decode_equip_save_list(buf: &[u8]) -> Vec<EquipItemSave> {
         }
     }
     items
-}
-
-fn encode_equip_save_list(items: &[EquipItemSave]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    for item in items {
-        let inner = encode_equip_save(item);
-        encode_ld(&mut buf, 1, &inner);
-    }
-    buf
 }
 
 fn decode_buddy_save(buf: &[u8]) -> BuddyItemSave {
@@ -671,25 +535,6 @@ fn decode_buddy_save(buf: &[u8]) -> BuddyItemSave {
     item
 }
 
-fn encode_buddy_save(item: &BuddyItemSave) -> Vec<u8> {
-    let mut buf = Vec::new();
-    encode_varint_field(&mut buf, 1, item.id as u64);
-    encode_varint_field(&mut buf, 2, item.level as u64);
-    encode_varint_field(&mut buf, 3, item.exp as u64);
-    encode_varint_field(&mut buf, 4, item.rank as u64);
-    encode_varint_field(&mut buf, 5, item.star as u64);
-    encode_varint_field(&mut buf, 6, item.favorite as u64);
-    if !item.skill_levels.is_empty() {
-        let sk_buf: Vec<u8> = item
-            .skill_levels
-            .iter()
-            .flat_map(|v| encode_varint(*v as u64))
-            .collect();
-        encode_ld(&mut buf, 7, &sk_buf);
-    }
-    buf
-}
-
 fn decode_buddy_save_list(buf: &[u8]) -> Vec<BuddyItemSave> {
     let mut items = Vec::new();
     let mut pos = 0;
@@ -712,15 +557,6 @@ fn decode_buddy_save_list(buf: &[u8]) -> Vec<BuddyItemSave> {
     items
 }
 
-fn encode_buddy_save_list(items: &[BuddyItemSave]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    for item in items {
-        let inner = encode_buddy_save(item);
-        encode_ld(&mut buf, 1, &inner);
-    }
-    buf
-}
-
 fn decode_hall_save(buf: &[u8]) -> HallSave {
     let mut hall = HallSave::default();
     let mut pos = 0;
@@ -740,12 +576,6 @@ fn decode_hall_save(buf: &[u8]) -> HallSave {
         }
     }
     hall
-}
-
-fn encode_hall_save(hall: &HallSave) -> Vec<u8> {
-    let mut buf = Vec::new();
-    encode_varint_field(&mut buf, 1, hall.section_id as u64);
-    buf
 }
 
 fn read_varint(buf: &[u8], pos: usize) -> Option<(u64, usize)> {
@@ -805,33 +635,4 @@ fn decode_varint_list(buf: &[u8]) -> Vec<u32> {
         list.push(v as u32);
     }
     list
-}
-
-fn encode_varint(value: u64) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let mut v = value;
-    loop {
-        let byte = (v & 0x7f) as u8;
-        v >>= 7;
-        if v != 0 {
-            buf.push(byte | 0x80);
-        } else {
-            buf.push(byte);
-            break;
-        }
-    }
-    buf
-}
-
-fn encode_varint_field(buf: &mut Vec<u8>, field: u32, value: u64) {
-    let tag = (field << 3) | 0; // wire type 0
-    buf.extend(encode_varint(tag as u64));
-    buf.extend(encode_varint(value));
-}
-
-fn encode_ld(buf: &mut Vec<u8>, field: u32, data: &[u8]) {
-    let tag = (field << 3) | 2; // wire type 2
-    buf.extend(encode_varint(tag as u64));
-    buf.extend(encode_varint(data.len() as u64));
-    buf.extend_from_slice(data);
 }

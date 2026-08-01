@@ -1,4 +1,4 @@
-use crate::remielle_save::{EquipItemSave, PlayerSave};
+use crate::remielle_save::EquipItemSave;
 use crate::{
     app_state::{self, AppState},
     auth::{get_session, html_escape_attr, redirect_to_login},
@@ -7,7 +7,7 @@ use crate::{
         hakushin::{load_hakushin_data, to_asset_url},
         templates::{
             EquipTemplateIndex, equip_set_id, equip_slot, force_disc_fourth_digit,
-            load_equip_template_index, load_equip_templates, resolve_equip_item_id,
+            load_equip_template_index, resolve_equip_item_id,
         },
     },
     domain::discs::{
@@ -67,8 +67,6 @@ pub(crate) struct GenerateEquipForm {
     count: u32,
 }
 
-const MAX_DISCS: usize = 3000;
-
 fn equip_main_property(equip: &EquipItemSave) -> (u32, u32, u32) {
     equip
         .properties
@@ -85,10 +83,6 @@ fn equip_sub_properties(equip: &EquipItemSave) -> Vec<(u32, u32, u32)> {
         .take(4)
         .map(|p| (p.key, p.base_value, p.add_value))
         .collect()
-}
-
-fn next_equip_uid(save: &PlayerSave) -> u32 {
-    save.equip.iter().map(|e| e.uid).max().unwrap_or(0) + 1
 }
 
 fn render_error_page(error_label: &str, message: &str, locale: Locale) -> String {
@@ -852,19 +846,6 @@ pub(crate) async fn equip_delete_all_unlocked(
     Redirect::to("/dashboard?tab=discs").into_response()
 }
 
-pub(crate) async fn equip_lock_selected(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
-    _raw_form: RawForm,
-) -> impl IntoResponse {
-    let Some((_session_id, _session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
-    };
-    let _ = &state;
-    Redirect::to("/dashboard?tab=discs").into_response()
-}
-
 fn parse_selected_equip_uids(raw_form: &str) -> Vec<u32> {
     let mut ids = Vec::new();
     for pair in raw_form.split('&') {
@@ -963,16 +944,13 @@ pub(crate) fn render_equip_cards(
     state: &AppState,
     uid: u32,
     delete_mode: bool,
-    _lock_mode: bool,
     locale: Locale,
     filter_set_id: Option<u32>,
     filter_slot: Option<u32>,
     filter_main_stat: Option<u32>,
-    _filter_status: Option<&str>,
     page: u32,
     online: bool,
 ) -> String {
-    let equip_templates = load_equip_templates(&state.asset_dir);
     let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
 
@@ -997,7 +975,6 @@ pub(crate) fn render_equip_cards(
             .discs
             .get(&set_id)
             .map(|entry| entry.name.clone())
-            .or_else(|| equip_templates.get(&equip_item_id).cloned())
             .unwrap_or_else(|| format!("{fallback_disc} {equip_item_id}"));
 
         let main_stat = equip_main_property(equip);
@@ -1099,7 +1076,6 @@ pub(crate) fn render_equip_cards(
         filter_set_id,
         filter_slot,
         filter_main_stat,
-        _filter_status,
         delete_mode,
     );
     let pagination_html = if total_pages > 1 {
@@ -1110,7 +1086,6 @@ pub(crate) fn render_equip_cards(
             filter_set_id,
             filter_slot,
             filter_main_stat,
-            _filter_status,
             total,
             delete_mode,
         )
@@ -1228,7 +1203,6 @@ fn render_disc_filter_panel(
     filter_set_id: Option<u32>,
     filter_slot: Option<u32>,
     filter_main_stat: Option<u32>,
-    _filter_status: Option<&str>,
     delete_mode: bool,
 ) -> String {
     let set_opts = {
@@ -1374,7 +1348,6 @@ fn render_pagination(
     filter_set_id: Option<u32>,
     filter_slot: Option<u32>,
     filter_main_stat: Option<u32>,
-    _filter_status: Option<&str>,
     total: usize,
     delete_mode: bool,
 ) -> String {
@@ -1399,11 +1372,6 @@ fn render_pagination(
     }
     if let Some(m) = filter_main_stat {
         filter_params.push_str(&format!("&main_stat={}", m));
-    }
-    if let Some(_st) = _filter_status {
-        if !_st.is_empty() {
-            filter_params.push_str(&format!("&status={}", _st));
-        }
     }
 
     let prev_link = if page > 1 {

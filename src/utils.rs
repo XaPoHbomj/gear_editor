@@ -1,4 +1,3 @@
-use crate::AppState;
 use std::{fs, path::Path};
 
 pub(crate) fn audit_log(root_dir: &Path, username: &str, uid: i32, action: &str, detail: &str) {
