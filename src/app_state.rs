@@ -102,14 +102,21 @@ impl AppState {
         else {
             return 1;
         };
-        let value = line
-            .trim()
+        Self::parse_base_player_uid(line)
+    }
+
+    /// Parse the `.base_player_uid` value out of a config.zon line like
+    /// `    .base_player_uid = 400,`.
+    pub(crate) fn parse_base_player_uid(line: &str) -> u32 {
+        line.trim()
             .trim_start_matches(".base_player_uid")
+            .trim()
             .trim_start_matches('=')
             .trim()
             .trim_end_matches(',')
-            .trim();
-        value.parse::<u32>().unwrap_or(1)
+            .trim()
+            .parse::<u32>()
+            .unwrap_or(1)
     }
 
     pub(crate) fn active_ctl_addr(&self, headers: &HeaderMap) -> String {
@@ -246,6 +253,21 @@ mod tests {
         assert_eq!(s.server_ctl_addr(false, 2), "127.0.0.1:15812");
         assert_eq!(s.server_ctl_addr(true, 1), "127.0.0.1:15911");
         assert_eq!(s.server_ctl_addr(true, 3), "127.0.0.1:15913");
+    }
+
+    #[test]
+    fn parses_base_player_uid_line() {
+        assert_eq!(
+            AppState::parse_base_player_uid("    .base_player_uid = 400,"),
+            400
+        );
+        assert_eq!(
+            AppState::parse_base_player_uid(".base_player_uid = 100,"),
+            100
+        );
+        assert_eq!(AppState::parse_base_player_uid(".base_player_uid=55,"), 55);
+        // Missing field -> default 1
+        assert_eq!(AppState::parse_base_player_uid(".game_bind_address = ..."), 1);
     }
 
     #[test]
