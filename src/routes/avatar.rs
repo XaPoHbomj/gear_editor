@@ -50,7 +50,7 @@ pub(crate) async fn avatar_edit(
     let online = ctl::player_is_online(&state.active_ctl_addr(&headers), uid);
 
     let level = avatar_item.level;
-    let unlocked_talent_num = avatar_item.rank;
+    let unlocked_talent_num = avatar_item.talents;
     let skill_levels = &avatar_item.skill_levels;
 
     let hakushin = load_hakushin_data(&state, locale);
@@ -160,9 +160,9 @@ pub(crate) async fn avatar_update(
     }
 
     if let Err(e) =
-        ctl::mod_avatar_meta(&addr, uid, avatar_id, 2, payload.unlocked_talent_num as u64)
+        ctl::mod_avatar_meta(&addr, uid, avatar_id, 3, payload.unlocked_talent_num as u64)
     {
-        return Html(format!("ctl error (rank): {e}")).into_response();
+        return Html(format!("ctl error (talents): {e}")).into_response();
     }
 
     let skill_map: [(u32, u32); 6] = [
@@ -259,7 +259,7 @@ fn render_skill_inputs(locale: Locale, skill_levels: &[u32], online: bool) -> St
 
     let core_ability = skill_levels.get(5).copied().unwrap_or(1);
     html.push_str(&format!(
-        "<div><label>{label}</label><input name=\"core_ability\" type=\"number\" min=\"0\" max=\"6\" value=\"{core_ability}\" {disabled} /></div>",
+        "<div><label>{label}</label><input name=\"core_ability\" type=\"number\" min=\"1\" max=\"7\" value=\"{core_ability}\" {disabled} /></div>",
         label = t(locale, "avatar.core_ability"),
     ));
 
