@@ -320,7 +320,8 @@ pub fn server_reachable(addr: &str) -> bool {
     }
     // Probe with a synthetic player_uid (0) that the server will never have in
     // its uid_map; a reply of any kind means the server is up, silence means down.
-    let reachable = probe_presence(addr, 0) != Presence::Unreachable;
+    let probe = probe_presence(addr, 0);
+    let reachable = probe != Presence::Unreachable;
     cache
         .lock()
         .unwrap()

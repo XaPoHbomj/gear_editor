@@ -491,18 +491,18 @@ pub(crate) fn render_da_shiyu_status(
 }
 
 fn render_hadal_edit_form(server: u32, hadal_id: &str, locale: Locale, server_up: bool) -> String {
-    let disabled = if server_up { "" } else { " disabled" };
+    let disabled_attr = if server_up { "" } else { " disabled" };
     format!(
         r#"<form method="post" action="/admin/update-hadal-zone" style="margin-top:10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;{dim}">
             <input type="hidden" name="server" value="{server}">
             <input type="hidden" name="hadal_id" value="{hadal_id}">
-            <input type="number" name="new_zone" placeholder="New ID" required{disabled} style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
-            <button type="submit" disabled{disabled} style="padding:5px 10px; border:0; border-radius:6px; background:#4c7dff; color:#fff; font-weight:600; font-size:12px; cursor:pointer;">{update_label}</button>
+            <input type="number" name="new_zone" placeholder="New ID" required{disabled_attr} style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
+            <button type="submit"{disabled_attr} style="padding:5px 10px; border:0; border-radius:6px; background:#4c7dff; color:#fff; font-weight:600; font-size:12px; cursor:pointer;">{update_label}</button>
         </form>"#,
         server = server,
         hadal_id = hadal_id,
         update_label = t(locale, "status.update_zone"),
-        disabled = disabled,
+        disabled_attr = disabled_attr,
         dim = if server_up {
             ""
         } else {
