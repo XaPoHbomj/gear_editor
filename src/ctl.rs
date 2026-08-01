@@ -273,11 +273,15 @@ fn probe_presence(addr: &str, player_uid: u32) -> Presence {
 
     let mut rsp = [0u8; 16];
     match socket.recv_from(&mut rsp) {
-        Ok((n, _)) if n >= 16 => {
+        // ACK is 8 bytes (header only); NAK is 16 bytes (header + reason).
+        Ok((n, _)) if n >= 8 => {
             let tag = u16::from_le_bytes([rsp[2], rsp[3]]);
             if tag == 0 {
                 Presence::Online
             } else if tag == 1 {
+                if n < 16 {
+                    return Presence::Unreachable;
+                }
                 let reason = u32::from_le_bytes([rsp[8], rsp[9], rsp[10], rsp[11]]);
                 if reason == 5 {
                     Presence::Offline
@@ -344,21 +348,21 @@ mod tests {
 
     #[test]
     fn probe_classifies_online_offline_unreachable() {
-        // ACK (online)
+        // ACK (online) - real ACK is 8 bytes (header only, no event payload)
         {
             let (srv, addr) = server_handle();
             let t = std::thread::spawn(move || {
                 let mut buf = [0u8; 16];
-                let (n, peer) = srv.recv_from(&mut buf).unwrap();
-                // echo an ACK: header(8) + event(8). bytes 2-3 = event_tag = 0
-                let mut rsp = [0u8; 16];
+                let (_n, peer) = srv.recv_from(&mut buf).unwrap();
+                // echo an 8-byte ACK: header(8), bytes 2-3 = event_tag = 0
+                let mut rsp = [0u8; 8];
                 rsp[2] = 0;
                 rsp[3] = 0;
                 rsp[4] = buf[4];
                 rsp[5] = buf[5];
                 rsp[6] = buf[6];
                 rsp[7] = buf[7];
-                srv.send_to(&rsp[..n.min(16)], peer).unwrap();
+                srv.send_to(&rsp, peer).unwrap();
             });
             let presence = probe_presence(&addr, 1);
             t.join().unwrap();
