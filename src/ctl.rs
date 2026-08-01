@@ -221,6 +221,16 @@ pub fn mod_hadal_entrance(addr: &str, entrance_id: u32, zone_id: u32) -> Result<
     send_and_ack(addr, &buf[..p])
 }
 
+/// Flush a player's live properties to the on-disk save without disconnecting.
+pub fn save_player(addr: &str, player_uid: u32) -> Result<(), String> {
+    // header(8) + player_uid(4) = 12
+    let mut buf = [0u8; 12];
+    buf[..HEADER_SIZE].copy_from_slice(&make_header(10, 0));
+    let mut p = HEADER_SIZE;
+    write_u32_le(&mut buf, &mut p, player_uid);
+    send_and_ack(addr, &buf[..p])
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Presence {
     Online,

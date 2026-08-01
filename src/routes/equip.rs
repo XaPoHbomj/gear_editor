@@ -339,6 +339,8 @@ pub(crate) async fn equip_update(
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
+    let addr = active_state.active_ctl_addr(&headers);
+    let _ = ctl::save_player(&addr, uid);
 
     Redirect::to("/dashboard?tab=discs").into_response()
 }
@@ -569,6 +571,8 @@ pub(crate) async fn equip_add(
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
+    let addr = active_state.active_ctl_addr(&headers);
+    let _ = ctl::save_player(&addr, uid);
 
     audit_log(
         &state.root_dir,
@@ -755,6 +759,8 @@ pub(crate) async fn equip_generate_submit(
         }
         ok += 1;
     }
+    let addr = active_state.active_ctl_addr(&headers);
+    let _ = ctl::save_player(&addr, uid);
 
     audit_log(
         &state.root_dir,
@@ -794,6 +800,7 @@ pub(crate) async fn equip_delete_submit(
             deleted += 1;
         }
     }
+    let _ = ctl::save_player(addr, uid);
 
     audit_log(
         &state.root_dir,
@@ -835,6 +842,7 @@ pub(crate) async fn equip_delete_all_unlocked(
             deleted += 1;
         }
     }
+    let _ = ctl::save_player(addr, uid);
 
     audit_log(
         &state.root_dir,

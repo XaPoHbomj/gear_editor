@@ -63,8 +63,6 @@ pub(crate) async fn admin_update_hadal_zone(
         return Html(format!("ctl error: {e}")).into_response();
     }
 
-    crate::routes::challenges::set_zone_cache_value(&active_state, entrance_id, payload.new_zone);
-
     audit_log(
         &state.root_dir,
         &session.username,

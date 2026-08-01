@@ -11,31 +11,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Mutex;
 use std::{fs, path::Path as FsPath};
-
-// In-memory cache of entrance zone IDs, keyed per server save dir.
-// Seeded from the per-server CALENDAR.bin on first read; updated when ctl updates succeed
-// so the status tab reflects changes immediately without restarting the game server.
-// Persists across server switches so each server keeps its own in-memory values.
-static ZONE_CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, HashMap<u32, u32>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn zone_cache_ensure(state: &AppState) {
-    let mut guard = ZONE_CACHE.lock().unwrap();
-    guard
-        .entry(state.state_dir.clone())
-        .or_insert_with(|| read_calendar_entrance_zones(state));
-}
-
-pub(crate) fn set_zone_cache_value(state: &AppState, entrance_id: u32, zone_id: u32) {
-    let mut guard = ZONE_CACHE.lock().unwrap();
-    guard
-        .entry(state.state_dir.clone())
-        .or_insert_with(|| read_calendar_entrance_zones(state))
-        .insert(entrance_id, zone_id);
-}
 
 #[derive(Deserialize)]
 pub(crate) struct ShiyuDetailQuery {
@@ -424,14 +400,11 @@ pub(crate) fn render_da_shiyu_status(
 ) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
-    zone_cache_ensure(state);
+    // Read zone IDs straight from the per-server CALENDAR.bin. The gamesv
+    // flushes the calendar on every hadal ctl update, so the file is fresh.
+    let zones = read_calendar_entrance_zones(state);
     let get_zone = |entrance_index: u32| -> u32 {
-        ZONE_CACHE
-            .lock()
-            .unwrap()
-            .get(&state.state_dir)
-            .and_then(|m| m.get(&entrance_index).copied())
-            .unwrap_or(0)
+        zones.get(&entrance_index).copied().unwrap_or(0)
     };
 
     let mut out = String::new();

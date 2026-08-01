@@ -181,6 +181,8 @@ pub(crate) async fn avatar_update(
         }
     }
 
+    let _ = ctl::save_player(&addr, uid);
+
     audit_log(
         &state.root_dir,
         &session.username,

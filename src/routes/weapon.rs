@@ -162,6 +162,7 @@ pub(crate) async fn weapon_update(
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
+    let _ = ctl::save_player(&addr, uid);
 
     Redirect::to("/dashboard?tab=weapons").into_response()
 }
@@ -306,6 +307,7 @@ pub(crate) async fn weapon_add(
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
+    let _ = ctl::save_player(&addr, uid);
 
     audit_log(
         &state.root_dir,
