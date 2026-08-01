@@ -101,15 +101,16 @@ pub fn mod_avatar_meta(
     field: u8,
     value: u64,
 ) -> Result<(), String> {
-    // header(8) + value(8) + player_uid(4) + avatar_id(4) + field(1) = 25
-    let mut buf = [0u8; 25];
+    // header(8) + value(8) + player_uid(4) + avatar_id(4) + field(1) + pad(7) = 32
+    // The Zig extern struct aligns to u64 (24 bytes), so 7 trailing pad bytes.
+    let mut buf = [0u8; 32];
     buf[..HEADER_SIZE].copy_from_slice(&make_header(2, 0));
     let mut p = HEADER_SIZE;
     write_u64_le(&mut buf, &mut p, value);
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, avatar_id);
     write_u8(&mut buf, &mut p, field);
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, &buf[..])
 }
 
 const WEAPON_UID_BASE: u32 = 0x01_00_00;
@@ -142,14 +143,15 @@ pub fn mod_weapon(
     star: u8,
     refine: u8,
 ) -> Result<(), String> {
-    // header(8) + player_uid(4) + weapon_uid(4) + meta(2) = 18
-    let mut buf = [0u8; 18];
+    // header(8) + player_uid(4) + weapon_uid(4) + meta(2) + pad(2) = 20
+    // Zig ModWeapon aligns to u32 (12 bytes), so 2 trailing pad bytes.
+    let mut buf = [0u8; 20];
     buf[..HEADER_SIZE].copy_from_slice(&make_header(6, 0));
     let mut p = HEADER_SIZE;
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, WEAPON_UID_BASE + weapon_uid_in_save);
     write_u16_le(&mut buf, &mut p, pack_weapon_meta(level, star, refine));
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, &buf[..])
 }
 
 pub fn create_equip(
@@ -182,18 +184,20 @@ pub fn mod_equip(
     star: u8,
     properties: &[(u16, u16, u8); 5],
 ) -> Result<(), String> {
-    // header(8) + player_uid(4) + equip_uid(4) + level(1) + star(1) + props(20) = 38
-    let mut buf = [0u8; 38];
+    // header(8) + player_uid(4) + equip_uid(4) + level(1) + star(1) + pad(2) + props(20) = 40
+    // Zig ModEquip pads the properties array to 4-byte alignment (32 bytes total op).
+    let mut buf = [0u8; 40];
     buf[..HEADER_SIZE].copy_from_slice(&make_header(7, 0));
     let mut p = HEADER_SIZE;
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, EQUIP_UID_BASE + equip_uid_in_save);
     write_u8(&mut buf, &mut p, level);
     write_u8(&mut buf, &mut p, star);
+    p += 2; // alignment padding before the properties array
     for &(key, base, add) in properties {
         write_u32_le(&mut buf, &mut p, pack_equip_property(key, base, add));
     }
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, &buf[..])
 }
 
 pub fn delete_equip(addr: &str, player_uid: u32, equip_uid_in_save: u32) -> Result<(), String> {
