@@ -802,7 +802,7 @@ pub(crate) async fn equip_delete_submit(
         "equip_delete",
         &format!("deleted {} discs", deleted),
     );
-    Redirect::to("/dashboard?tab=discs").into_response()
+    Redirect::to(&format!("/dashboard?tab=discs&deleted={}", deleted)).into_response()
 }
 
 pub(crate) async fn equip_delete_all_unlocked(
@@ -843,7 +843,7 @@ pub(crate) async fn equip_delete_all_unlocked(
         "equip_delete_all_unlocked",
         &format!("deleted {} discs", deleted),
     );
-    Redirect::to("/dashboard?tab=discs").into_response()
+    Redirect::to(&format!("/dashboard?tab=discs&deleted={}", deleted)).into_response()
 }
 
 fn parse_selected_equip_uids(raw_form: &str) -> Vec<u32> {
@@ -950,6 +950,7 @@ pub(crate) fn render_equip_cards(
     filter_main_stat: Option<u32>,
     page: u32,
     online: bool,
+    deleted_notice: Option<u32>,
 ) -> String {
     let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
@@ -1100,6 +1101,15 @@ pub(crate) fn render_equip_cards(
         ));
     }
 
+    let notice = deleted_notice
+        .map(|n| {
+            format!(
+                "<div class=\"panel\" style=\"display:block; margin-bottom:16px;\"><p class=\"meta\">{}</p></div>",
+                t(locale, "disc.deleted_notice").replace("{count}", &n.to_string())
+            )
+        })
+        .unwrap_or_default();
+
     let add_panel = if online {
         render_add_equip_panel(state, delete_mode, locale)
     } else {
@@ -1115,12 +1125,12 @@ pub(crate) fn render_equip_cards(
             t(locale, "disc.cancel"),
         );
         format!(
-            "{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}{filter_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
+            "{notice}{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}{filter_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
             t(locale, "disc.delete_selected"),
             pagination_html = pagination_html,
         )
     } else {
-        format!("{add_panel}{filter_panel}<div class=\"cards\">{cards}</div>{pagination_html}")
+        format!("{notice}{add_panel}{filter_panel}<div class=\"cards\">{cards}</div>{pagination_html}")
     }
 }
 

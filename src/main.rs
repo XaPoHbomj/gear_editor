@@ -53,6 +53,7 @@ struct TabQuery {
     page: Option<String>,
     weapon_class: Option<String>,
     weapon_rarity: Option<String>,
+    deleted: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +177,7 @@ async fn dashboard(
     let filter_page = query.page.and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
     let filter_weapon_class = query.weapon_class.unwrap_or_default();
     let filter_weapon_rarity = query.weapon_rarity.unwrap_or_default();
+    let deleted_notice = query.deleted;
 
     let current_sel = active_server_selection(&headers);
     let active_state = state_for_selected_server(&state, current_sel);
@@ -493,6 +495,7 @@ async fn dashboard(
                         filter_main_stat,
                         filter_page,
                         online,
+                        deleted_notice,
                     ),
                     "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
                     "status" => render_status_tab(&active_state, uid, locale, is_admin, server_up),
