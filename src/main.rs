@@ -248,6 +248,10 @@ async fn dashboard(
         presences.copy_from_slice(&results);
     }
 
+    // Until the account has logged into any game server (has a save there),
+    // only the status and client-updates tabs are shown.
+    let has_any_save = per_server_uid.iter().any(|u| u.is_some());
+
     // 6 server pills: Beta 1-3, Prod 1-3
     let mut server_pills = String::new();
     for (idx, is_prod, num) in [(0usize, false, 1u32), (1, false, 2), (2, false, 3), (3, true, 1), (4, true, 2), (5, true, 3)] {
@@ -309,11 +313,18 @@ async fn dashboard(
         opts = lang_opts,
     );
 
-    let tab_avatars = if tab == "avatars" { "active" } else { "" };
-    let tab_weapons = if tab == "weapons" { "active" } else { "" };
-    let tab_discs = if tab == "discs" { "active" } else { "" };
-    let tab_updates = if tab == "updates" { "active" } else { "" };
-    let tab_status = if tab == "status" { "active" } else { "" };
+    // When restricted, the visible tabs are Updates + Status (in that order),
+    // and Updates is the default for any other requested tab.
+    let effective_tab = if !has_any_save && tab != "updates" && tab != "status" {
+        "updates"
+    } else {
+        tab.as_str()
+    };
+    let tab_avatars = if effective_tab == "avatars" { "active" } else { "" };
+    let tab_weapons = if effective_tab == "weapons" { "active" } else { "" };
+    let tab_discs = if effective_tab == "discs" { "active" } else { "" };
+    let tab_updates = if effective_tab == "updates" { "active" } else { "" };
+    let tab_status = if effective_tab == "status" { "active" } else { "" };
 
     let title_suffix = {
         let version = active_state.read_version(current_sel);
@@ -406,9 +417,9 @@ async fn dashboard(
         <span></span>
     </button>
     <div class="desktop-tabs tabs">
-        <a class="{tab_avatars}" href="/dashboard?tab=avatars">{nav_characters}</a>
-        <a class="{tab_weapons}" href="/dashboard?tab=weapons">{nav_weapons}</a>
-        <a class="{tab_discs}" href="/dashboard?tab=discs">{nav_discs}</a>
+        {nav_chars_link}
+        {nav_weapons_link}
+        {nav_discs_link}
         <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
         <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     </div>
@@ -423,9 +434,9 @@ async fn dashboard(
 </header>
 <div class="mobile-overlay" onclick="this.classList.remove('open'); document.querySelector('.mobile-drawer').classList.remove('open');"></div>
 <aside class="mobile-drawer tabs" aria-hidden="true">
-    <a class="{tab_avatars}" href="/dashboard?tab=avatars">{nav_characters}</a>
-    <a class="{tab_weapons}" href="/dashboard?tab=weapons">{nav_weapons}</a>
-    <a class="{tab_discs}" href="/dashboard?tab=discs">{nav_discs}</a>
+    {nav_chars_link}
+    {nav_weapons_link}
+    {nav_discs_link}
     <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
     <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px; width:100%; box-sizing:border-box;">
@@ -444,24 +455,26 @@ async fn dashboard(
 </main>
 </body>
 </html>"#,
-        tab_avatars = tab_avatars,
-        tab_weapons = tab_weapons,
-        tab_discs = tab_discs,
+        tab_updates = tab_updates,
         tab_status = tab_status,
         content = match uid {
-            None => {
-                format!(
-                    "<div class=\"panel\" style=\"display:block;\"><p class=\"meta\">{}</p></div>",
-                    t(locale, "player.not_found")
-                )
-            }
+            None => match effective_tab {
+                "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
+                "status" => render_status_tab(&active_state, 0, locale, is_admin, ctl::server_reachable(&active_state.ctl_addr)),
+                _ => {
+                    format!(
+                        "<div class=\"panel\" style=\"display:block;\"><p class=\"meta\">{}</p></div>",
+                        t(locale, "player.not_found")
+                    )
+                }
+            },
             Some(uid) => {
                 let online = match presences[current_sel_index(current_sel)] {
                     Presence::Online => true,
                     _ => false,
                 };
                 let server_up = ctl::server_reachable(&active_state.ctl_addr);
-                match tab.as_str() {
+                match effective_tab {
                     "weapons" => render_weapon_cards(
                         &active_state,
                         uid,
@@ -492,9 +505,21 @@ async fn dashboard(
         lang_selector = lang_selector,
         lang_attr = locale.lang_attr(),
         title_suffix = title_suffix,
-        nav_characters = t(locale, "nav.characters"),
-        nav_weapons = t(locale, "nav.weapons"),
-        nav_discs = t(locale, "nav.discs"),
+        nav_chars_link = if has_any_save {
+            format!("<a class=\"{}\" href=\"/dashboard?tab=avatars\">{}</a>", tab_avatars, t(locale, "nav.characters"))
+        } else {
+            String::new()
+        },
+        nav_weapons_link = if has_any_save {
+            format!("<a class=\"{}\" href=\"/dashboard?tab=weapons\">{}</a>", tab_weapons, t(locale, "nav.weapons"))
+        } else {
+            String::new()
+        },
+        nav_discs_link = if has_any_save {
+            format!("<a class=\"{}\" href=\"/dashboard?tab=discs\">{}</a>", tab_discs, t(locale, "nav.discs"))
+        } else {
+            String::new()
+        },
         nav_client_updates = t(locale, "nav.client_updates"),
         nav_status = t(locale, "nav.status"),
         signed_in_as = t(locale, "header.signed_in_as"),
