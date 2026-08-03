@@ -80,6 +80,17 @@ pub(crate) async fn admin_update_hadal_zone(
 
 const MIN_FREE_SPACE: u64 = 1024 * 1024 * 1024;
 
+fn safe_upload_name(file_name: &str) -> Option<String> {
+    if file_name.contains('/') || file_name.contains('\\') || file_name.starts_with('.') {
+        return None;
+    }
+    let base = std::path::Path::new(file_name).file_name()?.to_str()?.to_string();
+    if base != file_name || base.is_empty() {
+        return None;
+    }
+    Some(base)
+}
+
 pub(crate) async fn admin_upload_update(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -117,13 +128,19 @@ pub(crate) async fn admin_upload_update(
     let mut saved = false;
     let mut saved_name = String::new();
     while let Ok(Some(field)) = multipart.next_field().await {
-        let Some(file_name) = field.file_name().map(|s| s.to_string()) else {
+        let Some(raw_name) = field.file_name().map(|s| s.to_string()) else {
+            continue;
+        };
+        let Some(file_name) = safe_upload_name(&raw_name) else {
             continue;
         };
         if !file_name.ends_with(".zip") {
             continue;
         }
         let dest = update_dir.join(&file_name);
+        if !dest.starts_with(&update_dir) {
+            continue;
+        }
         if dest.exists() {
             return Html(format!(
                 "{} '{}' {}",
@@ -203,7 +220,7 @@ pub(crate) async fn admin_delete_update(
         .join("client_updates/Beta/Update")
         .join(&payload.filename);
 
-    if !dest.exists() || !dest.starts_with(state.root_dir.join("client_updates")) {
+    if !dest.starts_with(state.root_dir.join("client_updates")) || !dest.exists() {
         return (StatusCode::NOT_FOUND, Html("File not found")).into_response();
     }
 
@@ -212,4 +229,30 @@ pub(crate) async fn admin_delete_update(
     }
 
     Redirect::to("/dashboard?tab=updates").into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_upload_name_accepts_plain_zip() {
+        assert_eq!(safe_upload_name("patch_1.0.zip"), Some("patch_1.0.zip".to_string()));
+    }
+
+    #[test]
+    fn safe_upload_name_rejects_traversal() {
+        assert_eq!(safe_upload_name("../../etc/cron.d/x.zip"), None);
+        assert_eq!(safe_upload_name("..\\..\\x.zip"), None);
+        assert_eq!(safe_upload_name("sub/x.zip"), None);
+        assert_eq!(safe_upload_name("/abs/path.zip"), None);
+        assert_eq!(safe_upload_name(".hidden.zip"), None);
+        assert_eq!(safe_upload_name(".."), None);
+    }
+
+    #[test]
+    fn safe_upload_name_rejects_basename_mismatch() {
+        assert_eq!(safe_upload_name("x/../patch.zip"), None);
+        assert_eq!(safe_upload_name(""), None);
+    }
 }
