@@ -218,6 +218,12 @@ fn decode_avatar_save(buf: &[u8]) -> AvatarItemSave {
                     pos = np;
                 }
             }
+            (8, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.skill_levels.push(v as u32);
+                    pos = np;
+                }
+            }
             (8, 2) => {
                 let (sub, np) = read_ld(buf, pos).unwrap_or((&[], buf.len()));
                 pos = np;
@@ -232,6 +238,12 @@ fn decode_avatar_save(buf: &[u8]) -> AvatarItemSave {
             (10, 0) => {
                 if let Some((v, np)) = read_varint(buf, pos) {
                     item.weapon_uid = v as u32;
+                    pos = np;
+                }
+            }
+            (11, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.equipment_uids.push(v as u32);
                     pos = np;
                 }
             }
@@ -520,6 +532,12 @@ fn decode_buddy_save(buf: &[u8]) -> BuddyItemSave {
                     pos = np;
                 }
             }
+            (7, 0) => {
+                if let Some((v, np)) = read_varint(buf, pos) {
+                    item.skill_levels.push(v as u32);
+                    pos = np;
+                }
+            }
             (7, 2) => {
                 let (sub, np) = read_ld(buf, pos).unwrap_or((&[], buf.len()));
                 pos = np;
@@ -635,4 +653,58 @@ fn decode_varint_list(buf: &[u8]) -> Vec<u32> {
         list.push(v as u32);
     }
     list
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn avatar_skill_levels_decode_repeated_wire0() {
+        // Seven repeated field-8 varints (wire type 0): the wire format rmpb
+        // actually emits for an ArrayList<u32>. Values: [12,12,12,12,12,7,12].
+        let mut item = Vec::new();
+        for &v in &[12u32, 12, 12, 12, 12, 7, 12] {
+            item.extend_from_slice(&[(8u8 << 3) | 0]); // field 8, wire 0
+            item.extend_from_slice(&[v as u8]); // varint < 128
+        }
+        let save = decode_avatar_save(&item);
+        assert_eq!(save.skill_levels, vec![12, 12, 12, 12, 12, 7, 12]);
+    }
+
+    #[test]
+    fn avatar_skill_levels_decode_packed_wire2() {
+        // Packed form (field 8, wire 2) is also accepted for compatibility.
+        let values = [12u8, 12, 12, 12, 12, 7, 12];
+        let mut item = vec![(8u8 << 3) | 2, values.len() as u8];
+        item.extend_from_slice(&values);
+        let save = decode_avatar_save(&item);
+        assert_eq!(save.skill_levels, vec![12, 12, 12, 12, 12, 7, 12]);
+    }
+
+    #[test]
+    fn avatar_equipment_uids_decode_repeated_wire0() {
+        let mut item = Vec::new();
+        for &v in &[1001u32, 2002] {
+            item.extend_from_slice(&[(11u8 << 3) | 0]);
+            item.extend_from_slice(&varint_bytes(v));
+        }
+        let save = decode_avatar_save(&item);
+        assert_eq!(save.equipment_uids, vec![1001, 2002]);
+    }
+
+    fn varint_bytes(mut v: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                out.push(b | 0x80);
+            } else {
+                out.push(b);
+                break;
+            }
+        }
+        out
+    }
 }
