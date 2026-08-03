@@ -121,7 +121,7 @@ Functions in `remielle_save.rs` are read-only now — only used for card views. 
 - **Build/test**: `cargo build` in `gear_editor/`. Run with `cargo run -r -j1`.
 - **i18n keys**: Add to all 5 locale functions in `i18n.rs`.
 - **New routes**: Register in `main.rs` Router, add tab link in both `.desktop-tabs` and `.mobile-drawer.tabs`.
-- **Data access**: Use `state.dump_lang_dir(locale)` for language-specific dump data; RU falls back to EN.
+- **Data access**: Use `state.dump_lang_dir(locale)` for language-specific dump data. RU files are populated by `translate_dump_to_ru.py` (translated names; DA/Shiyu/stat-name files copied from EN). No code-level EN fallback.
 - **Server selection**: Always resolve via `state_with_active_server(&state, &headers)` (or `state_for_selected_server`) so saves, assets, ctl addr, and base_uid are consistent with the selected server.
 - **Commit messages**: Short description, blank line, bullet points. **Do not commit/push without asking.**
 

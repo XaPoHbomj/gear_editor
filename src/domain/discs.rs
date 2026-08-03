@@ -3,18 +3,49 @@ use crate::{
     i18n::{Locale, t},
 };
 use serde_json::Value as JsonValue;
-use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex};
+use std::{
+    collections::{HashMap, hash_map::DefaultHasher},
+    fs,
+    hash::{Hash, Hasher},
+    path::PathBuf,
+    sync::Mutex,
+    time::SystemTime,
+};
 
 static STAT_NAMES_CACHE: std::sync::LazyLock<
-    Mutex<HashMap<(PathBuf, PathBuf, String), HashMap<u32, String>>>,
+    Mutex<HashMap<(PathBuf, PathBuf, String, u64), HashMap<u32, String>>>,
 > = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn dump_files_fingerprint(paths: &[&std::path::Path]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for path in paths {
+        path.to_string_lossy().hash(&mut hasher);
+        if let Ok(metadata) = fs::metadata(path) {
+            metadata.len().hash(&mut hasher);
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                    duration.as_secs().hash(&mut hasher);
+                    duration.subsec_nanos().hash(&mut hasher);
+                }
+            }
+        }
+    }
+    hasher.finish()
+}
 
 fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
     let lang_dir = state.dump_lang_dir(locale);
+    let weapon_details = lang_dir.join("weapon_details.json");
+    let bangboo_details = lang_dir.join("bangboo_details.json");
+    let fingerprint = dump_files_fingerprint(&[
+        weapon_details.as_path(),
+        bangboo_details.as_path(),
+    ]);
     let cache_key = (
         state.asset_dir.clone(),
         lang_dir.clone(),
         locale.code().to_string(),
+        fingerprint,
     );
     let mut cache = STAT_NAMES_CACHE.lock().unwrap();
     if let Some(cached) = cache.get(&cache_key) {
@@ -48,7 +79,7 @@ fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
     }
 
     let weapon_details = lang_dir.join("weapon_details.json");
-    if let Ok(data) = fs::read_to_string(weapon_details) {
+    if let Ok(data) = fs::read_to_string(&weapon_details) {
         if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
             if let Some(obj) = json.as_object() {
                 for (key, details) in obj {
@@ -82,7 +113,7 @@ fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
     }
 
     let bangboo_details = lang_dir.join("bangboo_details.json");
-    if let Ok(data) = fs::read_to_string(bangboo_details) {
+    if let Ok(data) = fs::read_to_string(&bangboo_details) {
         if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
             if let Some(obj) = json.as_object() {
                 for (_, details) in obj {

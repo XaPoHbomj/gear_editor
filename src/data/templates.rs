@@ -1,12 +1,28 @@
 use crate::zon::zon_parse_entries;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::DefaultHasher},
     fs,
+    hash::{Hash, Hasher},
     path::{Path as FsPath, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
+    time::SystemTime,
 };
 
-static EQUIP_TEMPLATE_CACHE: Mutex<Option<HashMap<PathBuf, EquipTemplateIndex>>> = Mutex::new(None);
+static EQUIP_TEMPLATE_CACHE: OnceLock<Mutex<HashMap<(PathBuf, u64), EquipTemplateIndex>>> = OnceLock::new();
+
+fn file_fingerprint(path: &FsPath) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    if let Ok(metadata) = fs::metadata(path) {
+        metadata.len().hash(&mut hasher);
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                duration.as_secs().hash(&mut hasher);
+                duration.subsec_nanos().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
 
 #[derive(Default, Clone)]
 pub(crate) struct EquipTemplateIndex {
@@ -21,15 +37,16 @@ pub(crate) struct EquipTemplateInfo {
 }
 
 pub(crate) fn load_equip_template_index(asset_dir: &FsPath) -> EquipTemplateIndex {
-    let mut cache = EQUIP_TEMPLATE_CACHE.lock().unwrap();
-    let cache = cache.get_or_insert_with(HashMap::new);
-    if let Some(index) = cache.get(asset_dir) {
+    let path = asset_dir.join("EquipmentTemplateTb.zon");
+    let cache_key = (asset_dir.to_path_buf(), file_fingerprint(&path));
+    let cache = EQUIP_TEMPLATE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap();
+    if let Some(index) = cache.get(&cache_key) {
         return index.clone();
     }
     let mut index = EquipTemplateIndex::default();
-    let path = asset_dir.join("EquipmentTemplateTb.zon");
     let Ok(data) = fs::read_to_string(&path) else {
-        cache.insert(asset_dir.to_path_buf(), index.clone());
+        cache.insert(cache_key, index.clone());
         return index;
     };
     for entry in zon_parse_entries(&data) {
@@ -56,7 +73,7 @@ pub(crate) fn load_equip_template_index(asset_dir: &FsPath) -> EquipTemplateInde
             .entry((info.suit_type, info.slot))
             .or_insert(item_id);
     }
-    cache.insert(asset_dir.to_path_buf(), index.clone());
+    cache.insert(cache_key, index.clone());
     index
 }
 
