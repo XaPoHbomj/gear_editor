@@ -155,14 +155,18 @@ pub(crate) async fn avatar_update(
         return Html(t(locale, "player.offline")).into_response();
     }
 
-    if let Err(e) = ctl::mod_avatar_meta(&addr, uid, avatar_id, 0, payload.level as u64) {
-        return Html(format!("ctl error (level): {e}")).into_response();
-    }
+    let current = load_player_save(&state, uid)
+        .and_then(|save| save.avatar.into_iter().find(|a| a.id == avatar_id));
 
-    if let Err(e) =
-        ctl::mod_avatar_meta(&addr, uid, avatar_id, 3, payload.unlocked_talent_num as u64)
-    {
-        return Html(format!("ctl error (talents): {e}")).into_response();
+    let current_level = current.as_ref().map_or(0, |a| a.level);
+    let current_talents = current.as_ref().map_or(0, |a| a.talents);
+
+    let mut ops: Vec<(u8, u64)> = Vec::new();
+    if payload.level as u64 != current_level as u64 {
+        ops.push((0, payload.level as u64));
+    }
+    if payload.unlocked_talent_num as u64 != current_talents as u64 {
+        ops.push((3, payload.unlocked_talent_num as u64));
     }
 
     let skill_map: [(u32, u32); 6] = [
@@ -175,13 +179,26 @@ pub(crate) async fn avatar_update(
     ];
 
     for &(skill_id, level) in &skill_map {
-        let packed = (skill_id as u64) | ((level as u64) << 32);
-        if let Err(e) = ctl::mod_avatar_meta(&addr, uid, avatar_id, 5, packed) {
-            return Html(format!("ctl error (skill {skill_id}): {e}")).into_response();
+        let current_skill = current
+            .as_ref()
+            .and_then(|a| a.skill_levels.get(skill_id as usize))
+            .copied()
+            .unwrap_or(1);
+        if level != current_skill {
+            let packed = (skill_id as u64) | ((level as u64) << 32);
+            ops.push((5, packed));
         }
     }
 
-    let _ = ctl::save_player(&addr, uid);
+    for &(field, value) in &ops {
+        if let Err(e) = ctl::mod_avatar_meta(&addr, uid, avatar_id, field, value) {
+            return Html(format!("ctl error (field {field}): {e}")).into_response();
+        }
+    }
+
+    if let Err(e) = ctl::save_player(&addr, uid) {
+        return Html(format!("ctl error (save): {e}")).into_response();
+    }
 
     audit_log(
         &state.root_dir,
