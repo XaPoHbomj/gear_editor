@@ -39,7 +39,7 @@ fn nak_reason_name(reason: u32) -> &'static str {
     }
 }
 
-fn send_and_ack(addr: &str, data: &[u8]) -> Result<(), String> {
+fn send_and_ack(addr: &str, player_uid: Option<u32>, data: &[u8]) -> Result<(), String> {
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("bind: {e}"))?;
     socket
         .set_read_timeout(Some(CTL_TIMEOUT))
@@ -66,6 +66,10 @@ fn send_and_ack(addr: &str, data: &[u8]) -> Result<(), String> {
     }
     if tag != 0 {
         return Err(format!("unexpected event tag={tag}"));
+    }
+    invalidate_server(addr);
+    if let Some(uid) = player_uid {
+        invalidate_presence(addr, uid);
     }
     Ok(())
 }
@@ -110,7 +114,7 @@ pub fn mod_avatar_meta(
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, avatar_id);
     write_u8(&mut buf, &mut p, field);
-    send_and_ack(addr, &buf[..])
+    send_and_ack(addr, Some(player_uid), &buf[..])
 }
 
 const WEAPON_UID_BASE: u32 = 0x01_00_00;
@@ -132,7 +136,7 @@ pub fn create_weapon(
     write_u32_le(&mut buf, &mut p, 1); // count = 1
     write_u16_le(&mut buf, &mut p, item_id);
     write_u16_le(&mut buf, &mut p, pack_weapon_meta(level, star, refine));
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, Some(player_uid), &buf[..p])
 }
 
 pub fn mod_weapon(
@@ -151,7 +155,7 @@ pub fn mod_weapon(
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, WEAPON_UID_BASE + weapon_uid_in_save);
     write_u16_le(&mut buf, &mut p, pack_weapon_meta(level, star, refine));
-    send_and_ack(addr, &buf[..])
+    send_and_ack(addr, Some(player_uid), &buf[..])
 }
 
 /// Max entries per CreateEquip control packet: 16 + 24*N <= mtu(1200) => N <= 49.
@@ -176,7 +180,7 @@ pub fn create_equip(
     }
     write_u16_le(&mut buf, &mut p, item_id);
     write_u16_le(&mut buf, &mut p, pack_equip_meta(level, star));
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, Some(player_uid), &buf[..p])
 }
 
 /// Create multiple equips in a single control packet (ExtendedOperation).
@@ -209,7 +213,7 @@ pub fn create_equips(
         write_u16_le(&mut buf, &mut p, item_id);
         write_u16_le(&mut buf, &mut p, pack_equip_meta(level, star));
     }
-    send_and_ack(addr, &buf)
+    send_and_ack(addr, Some(player_uid), &buf)
 }
 
 pub fn mod_equip(
@@ -233,7 +237,7 @@ pub fn mod_equip(
     for &(key, base, add) in properties {
         write_u32_le(&mut buf, &mut p, pack_equip_property(key, base, add));
     }
-    send_and_ack(addr, &buf[..])
+    send_and_ack(addr, Some(player_uid), &buf[..])
 }
 
 pub fn delete_equip(addr: &str, player_uid: u32, equip_uid_in_save: u32) -> Result<(), String> {
@@ -243,7 +247,7 @@ pub fn delete_equip(addr: &str, player_uid: u32, equip_uid_in_save: u32) -> Resu
     let mut p = HEADER_SIZE;
     write_u32_le(&mut buf, &mut p, player_uid);
     write_u32_le(&mut buf, &mut p, EQUIP_UID_BASE + equip_uid_in_save);
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, Some(player_uid), &buf[..p])
 }
 
 pub fn mod_hadal_entrance(addr: &str, entrance_id: u32, zone_id: u32) -> Result<(), String> {
@@ -254,7 +258,7 @@ pub fn mod_hadal_entrance(addr: &str, entrance_id: u32, zone_id: u32) -> Result<
     write_u32_le(&mut buf, &mut p, 1); // count = 1
     write_u32_le(&mut buf, &mut p, entrance_id);
     write_u32_le(&mut buf, &mut p, zone_id);
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, None, &buf[..p])
 }
 
 /// Flush a player's live properties to the on-disk save without disconnecting.
@@ -264,7 +268,7 @@ pub fn save_player(addr: &str, player_uid: u32) -> Result<(), String> {
     buf[..HEADER_SIZE].copy_from_slice(&make_header(10, 0));
     let mut p = HEADER_SIZE;
     write_u32_le(&mut buf, &mut p, player_uid);
-    send_and_ack(addr, &buf[..p])
+    send_and_ack(addr, Some(player_uid), &buf[..p])
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -297,6 +301,23 @@ fn store_presence(addr: &str, player_uid: u32, presence: Presence) {
         (addr.to_string(), player_uid),
         (presence, Instant::now()),
     );
+}
+
+/// Drop a cached presence entry so the next `presence_of` call re-probes.
+fn invalidate_presence(addr: &str, player_uid: u32) {
+    probe_cache()
+        .lock()
+        .unwrap()
+        .remove(&(addr.to_string(), player_uid));
+}
+
+/// Drop the cached server-reachability entry so the next call re-probes.
+fn invalidate_server(addr: &str) {
+    SERVER_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .remove(addr);
 }
 
 fn probe_presence(addr: &str, player_uid: u32) -> Presence {
@@ -485,5 +506,60 @@ mod tests {
         let entries = vec![(1u16, [(1u16, 2u16, 0u8); 5]); MAX_CREATE_EQUIP_BATCH + 1];
         let result = create_equips("127.0.0.1:1", 1, 15, 1, &entries);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn successful_ack_invalidates_presence_cache() {
+        let (srv, addr) = server_handle();
+        // Pre-populate a cached Online presence for (addr, 999).
+        store_presence(&addr, 999, Presence::Online);
+        assert_eq!(cached_presence(&addr, 999), Some(Presence::Online));
+
+        let t = std::thread::spawn(move || {
+            let mut buf = [0u8; 16];
+            let (n, peer) = srv.recv_from(&mut buf).unwrap();
+            assert!(n >= 8);
+            let mut rsp = [0u8; 8];
+            rsp[2] = 0; // event tag = ACK
+            rsp[4] = buf[4];
+            rsp[5] = buf[5];
+            rsp[6] = buf[6];
+            rsp[7] = buf[7];
+            srv.send_to(&rsp, peer).unwrap();
+        });
+
+        // save_player sends player_uid 999; on ACK the cache must be dropped.
+        let result = save_player(&addr, 999);
+        t.join().unwrap();
+        assert!(result.is_ok());
+        assert_eq!(cached_presence(&addr, 999), None);
+    }
+
+    #[test]
+    fn successful_ack_invalidates_server_cache() {
+        let (srv, addr) = server_handle();
+        let mut cache = SERVER_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+        cache.insert(addr.clone(), (true, Instant::now()));
+        drop(cache);
+
+        let t = std::thread::spawn(move || {
+            let mut buf = [0u8; 16];
+            let (n, peer) = srv.recv_from(&mut buf).unwrap();
+            assert!(n >= 8);
+            let mut rsp = [0u8; 8];
+            rsp[2] = 0;
+            rsp[4] = buf[4];
+            rsp[5] = buf[5];
+            rsp[6] = buf[6];
+            rsp[7] = buf[7];
+            srv.send_to(&rsp, peer).unwrap();
+        });
+
+        // mod_hadal_entrance passes None -> invalidates server cache only.
+        let result = mod_hadal_entrance(&addr, 1, 2);
+        t.join().unwrap();
+        assert!(result.is_ok());
+        let cache = SERVER_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+        assert!(!cache.contains_key(&addr));
     }
 }
