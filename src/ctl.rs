@@ -154,6 +154,9 @@ pub fn mod_weapon(
     send_and_ack(addr, &buf[..])
 }
 
+/// Max entries per CreateEquip control packet: 16 + 24*N <= mtu(1200) => N <= 49.
+const MAX_CREATE_EQUIP_BATCH: usize = 49;
+
 pub fn create_equip(
     addr: &str,
     player_uid: u32,
@@ -174,6 +177,39 @@ pub fn create_equip(
     write_u16_le(&mut buf, &mut p, item_id);
     write_u16_le(&mut buf, &mut p, pack_equip_meta(level, star));
     send_and_ack(addr, &buf[..p])
+}
+
+/// Create multiple equips in a single control packet (ExtendedOperation).
+/// `entries` holds `(item_id, properties)` pairs, all created at `level`/`star`.
+/// Must not exceed `MAX_CREATE_EQUIP_BATCH` entries (mtu-limited single packet).
+pub fn create_equips(
+    addr: &str,
+    player_uid: u32,
+    level: u8,
+    star: u8,
+    entries: &[(u16, [(u16, u16, u8); 5])],
+) -> Result<(), String> {
+    let count = entries.len();
+    if count == 0 {
+        return Ok(());
+    }
+    if count > MAX_CREATE_EQUIP_BATCH {
+        return Err(format!("too many equips in batch: {count} (max {MAX_CREATE_EQUIP_BATCH})"));
+    }
+    // header(8) + player_uid(4) + count(4) + count*24 (props 20 + id 2 + meta 2)
+    let mut buf = vec![0u8; HEADER_SIZE + 8 + count * 24];
+    buf[..HEADER_SIZE].copy_from_slice(&make_header(4, 0));
+    let mut p = HEADER_SIZE;
+    write_u32_le(&mut buf, &mut p, player_uid);
+    write_u32_le(&mut buf, &mut p, count as u32);
+    for &(item_id, properties) in entries {
+        for &(key, base, add) in &properties {
+            write_u32_le(&mut buf, &mut p, pack_equip_property(key, base, add));
+        }
+        write_u16_le(&mut buf, &mut p, item_id);
+        write_u16_le(&mut buf, &mut p, pack_equip_meta(level, star));
+    }
+    send_and_ack(addr, &buf)
 }
 
 pub fn mod_equip(
@@ -408,5 +444,46 @@ mod tests {
             let presence = probe_presence(&addr, 1);
             assert_eq!(presence, Presence::Unreachable);
         }
+    }
+
+    #[test]
+    fn create_equips_packs_multiple_entries() {
+        let (srv, addr) = server_handle();
+        let t = std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let (n, peer) = srv.recv_from(&mut buf).unwrap();
+            // header(8) + player_uid(4) + count(4) + 2*24
+            assert_eq!(n, 8 + 8 + 2 * 24);
+            assert_eq!(u16::from_le_bytes([buf[2], buf[3]]), 4); // operation_tag = create_equip
+            assert_eq!(u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]), 123);
+            assert_eq!(u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]), 2);
+            // first entry starts at 16
+            assert_eq!(u16::from_le_bytes([buf[16 + 20], buf[17 + 20]]), 1111); // id
+            // second entry starts at 40
+            assert_eq!(u16::from_le_bytes([buf[40 + 20], buf[41 + 20]]), 2222); // id
+            let mut rsp = [0u8; 8];
+            rsp[4] = buf[4];
+            rsp[5] = buf[5];
+            rsp[6] = buf[6];
+            rsp[7] = buf[7];
+            srv.send_to(&rsp, peer).unwrap();
+        });
+        let props = [(1u16, 2u16, 0u8); 5];
+        let result = create_equips(
+            &addr,
+            123,
+            15,
+            1,
+            &[(1111, props), (2222, props)],
+        );
+        t.join().unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn create_equips_rejects_over_batch() {
+        let entries = vec![(1u16, [(1u16, 2u16, 0u8); 5]); MAX_CREATE_EQUIP_BATCH + 1];
+        let result = create_equips("127.0.0.1:1", 1, 15, 1, &entries);
+        assert!(result.is_err());
     }
 }

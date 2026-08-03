@@ -656,7 +656,7 @@ pub(crate) async fn equip_generate(
                 </div>
                 <div>
                     <label>{count_label}</label>
-                    <input name="count" type="number" min="1" max="200" value="10" required />
+                    <input name="count" type="number" min="1" max="49" value="10" required />
                 </div>
             </div>
             <button>{gen_btn}</button>
@@ -703,7 +703,7 @@ pub(crate) async fn equip_generate_submit(
     let active_state = app_state::state_with_active_server(&state, &headers);
     let locale = locale_from_headers(&headers);
 
-    if payload.count == 0 || payload.count > 200 {
+    if payload.count == 0 || payload.count > 49 {
         return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.count_range"))).into_response();
     }
     let selected_slot = payload.slot.as_deref().map(parse_slot_value).unwrap_or(0);
@@ -723,8 +723,8 @@ pub(crate) async fn equip_generate_submit(
     let equip_index = load_equip_template_index(&active_state.asset_dir);
     let count_to_gen = payload.count as usize;
     let mut rng = rand::thread_rng();
-    let mut ok = 0usize;
 
+    let mut entries: Vec<(u16, [(u16, u16, u8); 5])> = Vec::with_capacity(count_to_gen);
     for _ in 0..count_to_gen {
         let (item_id, properties_tup) = match generate_random_disc(
             payload.equip_set_id,
@@ -746,18 +746,17 @@ pub(crate) async fn equip_generate_submit(
                     .into_response();
             }
         };
+        entries.push((item_id as u16, properties_tup));
+    }
 
-        if let Err(e) = ctl::create_equip(
-            &active_state.active_ctl_addr(&headers),
-            uid,
-            item_id as u16,
-            15,
-            1,
-            &properties_tup,
-        ) {
-            return Html(format!("ctl error (generate): {e}")).into_response();
-        }
-        ok += 1;
+    if let Err(e) = ctl::create_equips(
+        &active_state.active_ctl_addr(&headers),
+        uid,
+        15,
+        1,
+        &entries,
+    ) {
+        return Html(format!("ctl error (generate): {e}")).into_response();
     }
     let addr = active_state.active_ctl_addr(&headers);
     let _ = ctl::save_player(&addr, uid);
@@ -767,7 +766,7 @@ pub(crate) async fn equip_generate_submit(
         &session.username,
         session.uid,
         "equip_generate",
-        &format!("generated {} discs", ok),
+        &format!("generated {} discs", entries.len()),
     );
     Redirect::to("/dashboard?tab=discs").into_response()
 }
