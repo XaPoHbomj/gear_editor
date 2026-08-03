@@ -28,6 +28,11 @@ pub(crate) async fn asset_handler(
     }
 
     let full_path = state.root_dir.join(rel_path);
+    let allowed = [state.root_dir.join("zzz_dump/assets"), state.root_dir.join("client_updates")];
+    if !allowed.iter().any(|dir| full_path.starts_with(dir)) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let file = match File::open(&full_path).await {
         Ok(file) => file,
         Err(err) => {
