@@ -178,7 +178,8 @@ pub(crate) fn parse_server_selection(value: &str) -> ServerSelection {
         None => (value, 1),
     };
     let is_prod = env.eq_ignore_ascii_case("prod");
-    let server_num = num.clamp(1, 3);
+    // Beta is consolidated to a single server (server1); prod keeps 3 servers.
+    let server_num = if is_prod { num.clamp(1, 3) } else { num.clamp(1, 1) };
     ServerSelection {
         is_prod,
         server_num,
@@ -285,9 +286,9 @@ mod tests {
 
     #[test]
     fn parse_server_selection_handles_new_format() {
-        let s = parse_server_selection("beta:2");
+        let s = parse_server_selection("beta:2"); // beta consolidates to 1
         assert!(!s.is_prod);
-        assert_eq!(s.server_num, 2);
+        assert_eq!(s.server_num, 1);
         let s = parse_server_selection("prod:3");
         assert!(s.is_prod);
         assert_eq!(s.server_num, 3);
@@ -296,6 +297,9 @@ mod tests {
         assert_eq!(s.server_num, 1);
         let s = parse_server_selection("prod:9"); // clamp
         assert_eq!(s.server_num, 3);
+        let s = parse_server_selection("beta:9"); // beta clamp to 1
+        assert!(!s.is_prod);
+        assert_eq!(s.server_num, 1);
     }
 
     #[test]

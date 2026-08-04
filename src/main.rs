@@ -254,9 +254,9 @@ async fn dashboard(
     // only the status and client-updates tabs are shown.
     let has_any_save = per_server_uid.iter().any(|u| u.is_some());
 
-    // 6 server pills: Beta 1-3, Prod 1-3
+    // Server pills: Beta (single, consolidated) + Prod 1-3
     let mut server_pills = String::new();
-    for (idx, is_prod, num) in [(0usize, false, 1u32), (1, false, 2), (2, false, 3), (3, true, 1), (4, true, 2), (5, true, 3)] {
+    for (idx, is_prod, num) in [(0usize, false, 1u32), (3, true, 1), (4, true, 2), (5, true, 3)] {
         let sel = ServerSelection { is_prod, server_num: num };
         let target = if is_prod { "prod" } else { "beta" };
         let href = format!(

@@ -373,7 +373,7 @@ fn read_calendar_entrance_zones(state: &AppState) -> HashMap<u32, u32> {
         return map;
     }
     let count = (data.len() - 4) / 4;
-    for i in 0..count.min(17) {
+    for i in 0..count.min(20) {
         let offset = 4 + i * 4;
         if offset + 4 > data.len() {
             break;
@@ -409,55 +409,45 @@ pub(crate) fn render_da_shiyu_status(
 
     let mut out = String::new();
 
-    let (shiyu, da, da_hard) = (
-        get_zone(1),  // hadal_zone_scheduled
-        get_zone(9),  // boss_challenge_normal
-        get_zone(16), // boss_challenge_hard
-    );
+    // Beta uses the new multi-entrance HadalZone model: 3 scheduled (Shiyu),
+    // 3 trial (DA), 3 adversity (DA Hardcore). Prod keeps the old indices and
+    // is handled by the admin route's is_prod branch.
+    let cards = [
+        // (entrance_index, link_prefix, label_key, kind, hadal_id)
+        (1u32, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_1", 1u32),
+        (13, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_2", 2),
+        (14, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_3", 3),
+        (9, "/da/", "status.da", "da", "boss_challenge_trial_1", 1),
+        (10, "/da/", "status.da", "da", "boss_challenge_trial_2", 2),
+        (11, "/da/", "status.da", "da", "boss_challenge_trial_3", 3),
+        (16, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_1", 1),
+        (17, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_2", 2),
+        (18, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_3", 3),
+    ];
+
+    let mut card_html = String::new();
+    for (entrance_index, link_prefix, label_key, kind, hadal_id, num) in cards {
+        card_html.push_str(&render_status_card(
+            locale,
+            get_zone(entrance_index),
+            link_prefix,
+            &format!("{} {}", t(locale, label_key), num),
+            dummy_path,
+            kind,
+            1,
+            hadal_id,
+            is_admin,
+            server_up,
+        ));
+    }
+
     out.push_str(&format!(
         r#"<div class="panel" style="display:block; margin-bottom:16px;">
                 <div class="cards">
-                    {}
-                    {}
-                    {}
+                    {card_html}
                 </div>
             </div>"#,
-        render_status_card(
-            locale,
-            shiyu,
-            "/shiyu/",
-            t(locale, "status.shiyu"),
-            dummy_path,
-            "shiyu",
-            1,
-            "hadal_zone_scheduled",
-            is_admin,
-            server_up,
-        ),
-        render_status_card(
-            locale,
-            da,
-            "/da/",
-            t(locale, "status.da"),
-            dummy_path,
-            "da",
-            1,
-            "boss_challenge_normal",
-            is_admin,
-            server_up,
-        ),
-        render_status_card(
-            locale,
-            da_hard,
-            "/da/",
-            t(locale, "status.da_hardcore"),
-            dummy_path,
-            "da",
-            1,
-            "boss_challenge_hard",
-            is_admin,
-            server_up,
-        ),
+        card_html = card_html,
     ));
 
     out

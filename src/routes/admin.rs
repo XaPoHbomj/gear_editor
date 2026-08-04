@@ -38,21 +38,45 @@ pub(crate) async fn admin_update_hadal_zone(
         return (StatusCode::FORBIDDEN, Html("Forbidden")).into_response();
     }
 
+    let sel = crate::app_state::active_server_selection(&headers);
+
     if !(1..=3).contains(&payload.server) {
         return Html("Invalid server number (1-3)").into_response();
     }
+    if !sel.is_prod && payload.server != 1 {
+        return Html("Invalid server number (beta is server 1)").into_response();
+    }
 
-    let entrance_id = match payload.hadal_id.as_str() {
-        "hadal_zone_scheduled" => 1u32,
-        "hadal_zone_stable" => 2,
-        "hadal_zone_defensive" => 3,
-        "boss_challenge_normal" => 9,
-        "boss_challenge_hard" => 16,
-        _ => return Html("Invalid hadal_id").into_response(),
+    // Beta uses the new multi-entrance HadalZone indices; prod uses the old set.
+    let entrance_id = if sel.is_prod {
+        match payload.hadal_id.as_str() {
+            "hadal_zone_scheduled" => 1u32,
+            "hadal_zone_stable" => 2,
+            "hadal_zone_defensive" => 3,
+            "boss_challenge_normal" => 9,
+            "boss_challenge_hard" => 16,
+            _ => return Html("Invalid hadal_id").into_response(),
+        }
+    } else {
+        match payload.hadal_id.as_str() {
+            "hadal_zone_scheduled_1" => 1u32,
+            "hadal_zone_scheduled_2" => 13,
+            "hadal_zone_scheduled_3" => 14,
+            "hadal_zone_stable" => 2,
+            "hadal_zone_defensive" => 3,
+            "hadal_zone_ambush" => 4,
+            "boss_challenge_trial_1" => 9,
+            "boss_challenge_trial_2" => 10,
+            "boss_challenge_trial_3" => 11,
+            "boss_challenge_adversity_1" => 16,
+            "boss_challenge_adversity_2" => 17,
+            "boss_challenge_adversity_3" => 18,
+            "boss_challenge_adversity_4" => 19,
+            _ => return Html("Invalid hadal_id").into_response(),
+        }
     };
 
-    let active_state =
-        state_for_selected_server(&state, crate::app_state::active_server_selection(&headers));
+    let active_state = state_for_selected_server(&state, sel);
     let addr = active_state.ctl_addr.clone();
 
     if !ctl::server_reachable(&addr) {
