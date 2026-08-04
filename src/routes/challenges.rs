@@ -397,6 +397,7 @@ pub(crate) fn render_da_shiyu_status(
     locale: Locale,
     is_admin: bool,
     server_up: bool,
+    is_prod: bool,
 ) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
@@ -410,23 +411,31 @@ pub(crate) fn render_da_shiyu_status(
     let mut out = String::new();
 
     // Beta uses the new multi-entrance HadalZone model: 3 scheduled (Shiyu),
-    // 3 trial (DA), 3 adversity (DA Hardcore). Prod keeps the old indices and
-    // is handled by the admin route's is_prod branch.
-    let cards = [
-        // (entrance_index, link_prefix, label_key, kind, hadal_id)
-        (1u32, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_1", 1u32),
-        (13, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_2", 2),
-        (14, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_3", 3),
-        (9, "/da/", "status.da", "da", "boss_challenge_trial_1", 1),
-        (10, "/da/", "status.da", "da", "boss_challenge_trial_2", 2),
-        (11, "/da/", "status.da", "da", "boss_challenge_trial_3", 3),
-        (16, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_1", 1),
-        (17, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_2", 2),
-        (18, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_3", 3),
-    ];
+    // 3 trial (DA), 3 adversity (DA Hardcore). Prod keeps the old 3-card
+    // layout with the legacy entrance indices.
+    let cards: &[(u32, &str, &str, &str, &str, u32)] = if is_prod {
+        &[
+            (1u32, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled", 1u32),
+            (9, "/da/", "status.da", "da", "boss_challenge_normal", 1),
+            (16, "/da/", "status.da_hardcore", "da", "boss_challenge_hard", 1),
+        ]
+    } else {
+        &[
+            // (entrance_index, link_prefix, label_key, kind, hadal_id)
+            (1u32, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_1", 1u32),
+            (13, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_2", 2),
+            (14, "/shiyu/", "status.shiyu", "shiyu", "hadal_zone_scheduled_3", 3),
+            (9, "/da/", "status.da", "da", "boss_challenge_trial_1", 1),
+            (10, "/da/", "status.da", "da", "boss_challenge_trial_2", 2),
+            (11, "/da/", "status.da", "da", "boss_challenge_trial_3", 3),
+            (16, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_1", 1),
+            (17, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_2", 2),
+            (18, "/da/", "status.da_hardcore", "da", "boss_challenge_adversity_3", 3),
+        ]
+    };
 
     let mut card_html = String::new();
-    for (entrance_index, link_prefix, label_key, kind, hadal_id, num) in cards {
+    for &(entrance_index, link_prefix, label_key, kind, hadal_id, num) in cards {
         card_html.push_str(&render_status_card(
             locale,
             get_zone(entrance_index),

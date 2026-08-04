@@ -462,7 +462,7 @@ async fn dashboard(
         content = match uid {
             None => match effective_tab {
                 "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-                "status" => render_status_tab(&active_state, 0, locale, is_admin, ctl::server_reachable(&active_state.ctl_addr)),
+                "status" => render_status_tab(&active_state, 0, locale, is_admin, ctl::server_reachable(&active_state.ctl_addr), current_sel.is_prod),
                 _ => {
                     format!(
                         "<div class=\"panel\" style=\"display:block;\"><p class=\"meta\">{}</p></div>",
@@ -498,7 +498,7 @@ async fn dashboard(
                         deleted_notice,
                     ),
                     "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-                    "status" => render_status_tab(&active_state, uid, locale, is_admin, server_up),
+                    "status" => render_status_tab(&active_state, uid, locale, is_admin, server_up, current_sel.is_prod),
                     _ => render_avatar_cards(&active_state, uid, locale),
                 }
             }
@@ -569,6 +569,6 @@ fn server_index(sel: &ServerSelection) -> usize {
     }
 }
 
-fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool, server_up: bool) -> String {
-    render_da_shiyu_status(state, uid, locale, is_admin, server_up)
+fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool, server_up: bool, is_prod: bool) -> String {
+    render_da_shiyu_status(state, uid, locale, is_admin, server_up, is_prod)
 }
