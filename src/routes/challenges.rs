@@ -131,7 +131,7 @@ fn render_rich_text(text: &str) -> String {
 
 fn da_total_hp_from_base(base_hp: f64, da_id: u32) -> i64 {
     let multiplier = if da_mode_label_raw(da_id) == "hardcore" {
-        8.74 * 2.5
+        15.8
     } else {
         8.74
     };
