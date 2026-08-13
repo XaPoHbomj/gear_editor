@@ -426,7 +426,7 @@ fn decode_equip_save(buf: &[u8]) -> EquipItemSave {
             (5, 2) => {
                 let (sub, np) = read_ld(buf, pos).unwrap_or((&[], buf.len()));
                 pos = np;
-                item.properties = decode_equip_properties_list(sub);
+                item.properties.push(decode_equip_property(sub));
             }
             _ => {
                 if !skip_field(wire, buf, &mut pos) {
@@ -436,33 +436,6 @@ fn decode_equip_save(buf: &[u8]) -> EquipItemSave {
         }
     }
     item
-}
-
-fn decode_equip_properties_list(buf: &[u8]) -> Vec<EquipProperty> {
-    let mut props = Vec::new();
-    let mut pos = 0;
-    while pos < buf.len() {
-        let (tag, new_pos) = read_varint(buf, pos).unwrap_or((0, buf.len()));
-        pos = new_pos;
-        let field = tag >> 3;
-        let wire = tag & 7;
-        if field == 0 && wire == 2 {
-            // packed repeated message — not used here, we expect field=1 repeated
-            if let Some((sub, np)) = read_ld(buf, pos) {
-                pos = np;
-                props.push(decode_equip_property(sub));
-            } else {
-                break;
-            }
-        } else if field == 0 && wire == 0 {
-            if let Some((_, np)) = read_varint(buf, pos) {
-                pos = np;
-            }
-        } else {
-            break;
-        }
-    }
-    props
 }
 
 fn decode_equip_save_list(buf: &[u8]) -> Vec<EquipItemSave> {
@@ -706,5 +679,54 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn equip_save_decodes_repeated_property_fields() {
+        // One EquipItemSave from a real USD save: uid=0, id=34241, level=15,
+        // star=1, then 5 repeated field-5 (properties) messages, each holding a
+        // single EquipProperty (key=1, base_value=2, add_value=3).
+        let item: Vec<u8> = vec![
+            0x08, 0x00, // uid = 0
+            0x10, 0xC1, 0x8B, 0x02, // id = 34241
+            0x18, 0x0F, // level = 15
+            0x20, 0x01, // star = 1
+            // property 1: key=11103 (HP), base=550, add=0
+            0x2A, 0x08, 0x08, 0xDF, 0x56, 0x10, 0xA6, 0x04, 0x18, 0x00,
+            // property 2: key=20103 (CRIT Rate), base=240, add=6
+            0x2A, 0x09, 0x08, 0x87, 0x9D, 0x01, 0x10, 0xF0, 0x01, 0x18, 0x06,
+            // property 3: key=13102 (DEF%), base=480, add=1
+            0x2A, 0x08, 0x08, 0xAE, 0x66, 0x10, 0xE0, 0x03, 0x18, 0x01,
+            // property 4: key=13103 (DEF), base=15, add=1
+            0x2A, 0x07, 0x08, 0xAF, 0x66, 0x10, 0x0F, 0x18, 0x01,
+            // property 5: key=23203 (PEN), base=9, add=1
+            0x2A, 0x08, 0x08, 0xA3, 0xB5, 0x01, 0x10, 0x09, 0x18, 0x01,
+        ];
+        let save = decode_equip_save(&item);
+        assert_eq!(save.uid, 0);
+        assert_eq!(save.id, 34241);
+        assert_eq!(save.level, 15);
+        assert_eq!(save.star, 1);
+        assert_eq!(save.properties.len(), 5);
+        assert_eq!(save.properties[0].key, 11103);
+        assert_eq!(save.properties[0].base_value, 550);
+        assert_eq!(save.properties[0].add_value, 0);
+        assert_eq!(save.properties[1].key, 20103);
+        assert_eq!(save.properties[1].base_value, 240);
+        assert_eq!(save.properties[1].add_value, 6);
+        assert_eq!(save.properties[2].key, 13102);
+        assert_eq!(save.properties[3].key, 13103);
+        assert_eq!(save.properties[4].key, 23203);
+    }
+
+    #[test]
+    fn full_save_decodes_equip_properties() {
+        let data = std::fs::read("tests/fixtures_USD_100.bin").unwrap();
+        let save = decode_player_save(&data).expect("decode full save");
+        assert_eq!(save.equip.len(), 8);
+        for item in &save.equip {
+            assert_eq!(item.properties.len(), 5, "equip id {} must have 5 properties", item.id);
+            assert!(item.properties[0].key > 0, "main property key must be set");
+        }
     }
 }
