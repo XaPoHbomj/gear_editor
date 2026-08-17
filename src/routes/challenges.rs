@@ -1,5 +1,5 @@
 use crate::{
-    app_state::AppState,
+    app_state::{AppState, active_server_selection, state_for_selected_server},
     auth::html_escape_text,
     i18n::{Locale, locale_from_headers, t},
 };
@@ -623,6 +623,7 @@ pub(crate) async fn da_detail(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let locale = locale_from_headers(&headers);
+    let state = state_for_selected_server(&state, active_server_selection(&headers));
     let dump_dir = state.dump_lang_dir(locale);
     let boss_details_path = dump_dir.join("boss_details.json");
 
@@ -970,6 +971,7 @@ pub(crate) async fn shiyu_detail(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let locale = locale_from_headers(&headers);
+    let state = state_for_selected_server(&state, active_server_selection(&headers));
     let dump_dir = state.dump_lang_dir(locale);
     let shiyu_details_path = dump_dir.join("shiyu_details.json");
 

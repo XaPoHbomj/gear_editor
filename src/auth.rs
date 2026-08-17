@@ -10,7 +10,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const ADMIN_LOGIN: &str = "XaPoHbomj";
+pub(crate) const ADMIN_LOGINS: &[&str] = &["XaPoHbomj", "Chiki"];
+
+pub(crate) fn is_admin_username(username: &str) -> bool {
+    ADMIN_LOGINS.contains(&username)
+}
 
 static SESSION_STORE: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
 
@@ -111,7 +115,7 @@ pub(crate) fn validate_login(
         }
         pos += 257;
     }
-    let is_admin = username == ADMIN_LOGIN;
+    let is_admin = is_admin_username(username);
     match found_uid {
         Some(uid) => Ok(Some((
             Session {
@@ -214,7 +218,7 @@ pub(crate) fn remove_session(session_id: &str) {
 }
 
 pub(crate) fn is_admin(session: &Session) -> bool {
-    session.username == ADMIN_LOGIN
+    is_admin_username(&session.username)
 }
 
 #[cfg(test)]
