@@ -157,7 +157,7 @@ pub(crate) async fn weapon_update(
         uid,
         weapon_uid,
         payload.level as u8,
-        1,
+        5,
         payload.refine_level as u8,
     ) {
         return Html(format!("ctl error: {e}")).into_response();
