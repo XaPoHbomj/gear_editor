@@ -38,7 +38,7 @@ gear_editor/
     │   └── templates.rs# Template JSON via zon_parse_entries (ZON format)
     └── routes/
         ├── auth.rs     # Login page + register + switch-server (cookie beta:N/prod:N)
-        ├── avatar.rs   # Character edit/update/cards (ctl modAvatarMeta)
+        ├── avatar.rs   # Character edit/add (unlock)/update/cards (ctl modAvatarMeta, createAvatar)
         ├── weapon.rs   # Weapon edit/new/update (ctl create/modWeapon)
         ├── equip.rs    # Disc edit/new/generate/delete (ctl create/modEquip)
         ├── challenges.rs # DA/Shiyu detail pages + status tab (per selected server)

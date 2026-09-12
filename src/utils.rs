@@ -1,4 +1,42 @@
+use crate::i18n::Locale;
 use std::{fs, path::Path};
+
+/// Wraps page content in the shared standalone-page layout (doctype, head with
+/// the site favicon and shared CSS, dark container). `title` and `inner` are
+/// expected to be trusted/static or pre-escaped.
+pub(crate) fn page_shell(title: &str, locale: Locale, inner: &str) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="{lang}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.png" />
+  <title>{title}</title>
+  <style>{css}</style>
+</head>
+<body>
+  <div class="container">
+{inner}
+  </div>
+</body>
+</html>"#,
+        lang = locale.lang_attr(),
+        title = title,
+        css = shared_page_css(),
+        inner = inner,
+    )
+}
+
+/// Fallible, non-truncating narrow conversions for user-supplied numbers.
+/// Returns `None` instead of silently wrapping (e.g. `300u32 as u8 == 44`).
+pub(crate) fn u8_from_u32(value: u32) -> Option<u8> {
+    u8::try_from(value).ok()
+}
+
+pub(crate) fn u16_from_u32(value: u32) -> Option<u16> {
+    u16::try_from(value).ok()
+}
 
 pub(crate) fn audit_log(root_dir: &Path, username: &str, uid: i32, action: &str, detail: &str) {
     let log_dir = root_dir.join("logs");

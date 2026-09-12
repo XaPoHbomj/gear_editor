@@ -14,12 +14,11 @@ fn file_fingerprint(path: &FsPath) -> u64 {
     let mut hasher = DefaultHasher::new();
     if let Ok(metadata) = fs::metadata(path) {
         metadata.len().hash(&mut hasher);
-        if let Ok(modified) = metadata.modified() {
-            if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+        if let Ok(modified) = metadata.modified()
+            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
                 duration.as_secs().hash(&mut hasher);
                 duration.subsec_nanos().hash(&mut hasher);
             }
-        }
     }
     hasher.finish()
 }
@@ -60,7 +59,7 @@ pub(crate) fn load_equip_template_index(asset_dir: &FsPath) -> EquipTemplateInde
         let slot = entry
             .get("equipment_type")
             .and_then(|v| v.parse::<u32>().ok())
-            .or_else(|| Some(item_id % 10))
+            .or(Some(item_id % 10))
             .unwrap_or(1);
         let suit_type = entry
             .get("suit_type")

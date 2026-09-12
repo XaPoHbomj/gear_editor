@@ -12,9 +12,11 @@ use std::{
     time::SystemTime,
 };
 
-static STAT_NAMES_CACHE: std::sync::LazyLock<
-    Mutex<HashMap<(PathBuf, PathBuf, String, u64), HashMap<u32, String>>>,
-> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+type StatNamesMap = HashMap<u32, String>;
+type StatNamesCache = Mutex<HashMap<(PathBuf, PathBuf, String, u64), StatNamesMap>>;
+
+static STAT_NAMES_CACHE: std::sync::LazyLock<StatNamesCache> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn dump_files_fingerprint(paths: &[&std::path::Path]) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -22,12 +24,11 @@ fn dump_files_fingerprint(paths: &[&std::path::Path]) -> u64 {
         path.to_string_lossy().hash(&mut hasher);
         if let Ok(metadata) = fs::metadata(path) {
             metadata.len().hash(&mut hasher);
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+            if let Ok(modified) = metadata.modified()
+                && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
                     duration.as_secs().hash(&mut hasher);
                     duration.subsec_nanos().hash(&mut hasher);
                 }
-            }
         }
     }
     hasher.finish()
@@ -55,9 +56,9 @@ fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
 
     let mut weapon_prop = HashMap::new();
     let weapon_template = state.asset_dir.join("WeaponTemplateTb.json");
-    if let Ok(data) = fs::read_to_string(weapon_template) {
-        if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
-            if let Some(items) = json.get("data").and_then(|v| v.as_array()) {
+    if let Ok(data) = fs::read_to_string(weapon_template)
+        && let Ok(json) = serde_json::from_str::<JsonValue>(&data)
+            && let Some(items) = json.get("data").and_then(|v| v.as_array()) {
                 for item in items {
                     let Some(item_id) = item.get("item_id").and_then(|v| v.as_u64()) else {
                         continue;
@@ -75,13 +76,11 @@ fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
                     weapon_prop.insert(item_id as u32, (base_prop, rand_prop));
                 }
             }
-        }
-    }
 
     let weapon_details = lang_dir.join("weapon_details.json");
-    if let Ok(data) = fs::read_to_string(&weapon_details) {
-        if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
-            if let Some(obj) = json.as_object() {
+    if let Ok(data) = fs::read_to_string(&weapon_details)
+        && let Ok(json) = serde_json::from_str::<JsonValue>(&data)
+            && let Some(obj) = json.as_object() {
                 for (key, details) in obj {
                     let Ok(item_id) = key.parse::<u32>() else {
                         continue;
@@ -93,29 +92,23 @@ fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
                         .get("base_property")
                         .and_then(|v| v.get("name"))
                         .and_then(|v| v.as_str())
-                    {
-                        if *base_prop > 0 {
+                        && *base_prop > 0 {
                             map.entry(*base_prop).or_insert_with(|| name.to_string());
                         }
-                    }
                     if let Some(name) = details
                         .get("rand_property")
                         .and_then(|v| v.get("name"))
                         .and_then(|v| v.as_str())
-                    {
-                        if *rand_prop > 0 {
+                        && *rand_prop > 0 {
                             map.entry(*rand_prop).or_insert_with(|| name.to_string());
                         }
-                    }
                 }
             }
-        }
-    }
 
     let bangboo_details = lang_dir.join("bangboo_details.json");
-    if let Ok(data) = fs::read_to_string(&bangboo_details) {
-        if let Ok(json) = serde_json::from_str::<JsonValue>(&data) {
-            if let Some(obj) = json.as_object() {
+    if let Ok(data) = fs::read_to_string(&bangboo_details)
+        && let Ok(json) = serde_json::from_str::<JsonValue>(&data)
+            && let Some(obj) = json.as_object() {
                 for (_, details) in obj {
                     if let Some(ascensions) = details.get("ascensions").and_then(|v| v.as_object())
                     {
@@ -138,8 +131,6 @@ fn load_stat_names(state: &AppState, locale: Locale) -> HashMap<u32, String> {
                     }
                 }
             }
-        }
-    }
 
     cache.insert(cache_key, map.clone());
     map
@@ -358,8 +349,7 @@ pub(crate) fn validate_sub_stats(
     let mut keys = Vec::new();
     let mut base = Vec::new();
     let mut add = Vec::new();
-    for idx in 0..sub_keys.len() {
-        let key = sub_keys[idx];
+    for (idx, &key) in sub_keys.iter().enumerate() {
         if key == 0 || !allowed_subs.contains(&key) || keys.contains(&key) {
             continue;
         }
@@ -370,8 +360,8 @@ pub(crate) fn validate_sub_stats(
         if procs == 0 {
             procs = 1;
         }
-        if procs > 6 {
-            procs = 6;
+        if procs > DISC_SUB_MAX_PROCS {
+            procs = DISC_SUB_MAX_PROCS;
         }
         keys.push(key);
         base.push(stat_base);
@@ -379,12 +369,13 @@ pub(crate) fn validate_sub_stats(
     }
 
     let mut total_procs: u32 = add.iter().sum();
-    if total_procs > 9 {
+    let max_total = DISC_GENERATED_PROC_MAX;
+    if total_procs > max_total {
         for proc in add.iter_mut().rev() {
-            if total_procs <= 9 {
+            if total_procs <= max_total {
                 break;
             }
-            let excess = total_procs - 9;
+            let excess = total_procs - max_total;
             let reducible = proc.saturating_sub(1);
             let reduce = excess.min(reducible);
             *proc -= reduce;
@@ -405,4 +396,67 @@ pub(crate) fn stat_label(state: &AppState, locale: Locale, key: u32) -> String {
         .get(&key)
         .cloned()
         .unwrap_or_else(|| format!("{} {key}", t(locale, "stat.unknown")))
+}
+
+/// Number of equipment slots on a drive disc (1..=6).
+pub(crate) const DISC_SLOT_COUNT: u32 = 6;
+
+/// Maximum drive disc level.
+pub(crate) const DISC_LEVEL_MAX: u32 = 15;
+
+/// Maximum drive disc star.
+pub(crate) const DISC_STAR_MAX: u32 = 5;
+
+/// Number of secondary stats on a disc.
+pub(crate) const DISC_SUB_COUNT: usize = 4;
+
+/// Maximum procs a single secondary stat may receive.
+pub(crate) const DISC_SUB_MAX_PROCS: u32 = 6;
+
+/// Total secondary-stat procs a generated disc targets.
+pub(crate) const DISC_GENERATED_PROC_MIN: u32 = 8;
+pub(crate) const DISC_GENERATED_PROC_MAX: u32 = 9;
+
+/// Packs the main stat plus up to [`DISC_SUB_COUNT`] secondary stats into the
+/// fixed 5-entry wire layout used by the equip ctl commands.
+pub(crate) fn pack_equip_properties(
+    main_key: u32,
+    main_base: u32,
+    keys: &[u32],
+    base: &[u32],
+    add: &[u32],
+) -> [(u16, u16, u8); 5] {
+    let mut properties = [(0u16, 0u16, 0u8); 5];
+    properties[0] = (main_key as u16, main_base as u16, 0);
+    for i in 0..keys.len().min(DISC_SUB_COUNT) {
+        properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
+    }
+    properties
+}
+
+/// Builds the per-slot main-stat options, the per-main-stat secondary options,
+/// and the combined stat-label map used by the disc editor's cascading selects.
+pub(crate) type StatOptionIndex = (HashMap<u32, Vec<u32>>, HashMap<u32, Vec<u32>>, HashMap<u32, String>);
+
+pub(crate) fn stat_option_index(state: &AppState, locale: Locale) -> StatOptionIndex {
+    let mut main_by_slot = HashMap::new();
+    let mut sub_by_main = HashMap::new();
+    let mut labels = HashMap::new();
+    for slot in 1..=DISC_SLOT_COUNT {
+        let options = disk_main_stat_options(slot);
+        for key in &options {
+            labels
+                .entry(*key)
+                .or_insert_with(|| stat_label(state, locale, *key));
+            let sub_opts = disk_sub_stat_options(*key);
+            for sub_key in &sub_opts {
+                labels
+                    .entry(*sub_key)
+                    .or_insert_with(|| stat_label(state, locale, *sub_key));
+            }
+            sub_by_main.insert(*key, sub_opts);
+        }
+        main_by_slot.insert(slot, options);
+    }
+    (main_by_slot, sub_by_main, labels)
 }

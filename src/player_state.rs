@@ -8,8 +8,31 @@ use std::fs;
 
 pub(crate) fn load_player_save(state: &AppState, uid: u32) -> Option<PlayerSave> {
     let path = state.state_dir.join(format!("USD_{uid}.bin"));
-    let data = fs::read(&path).ok()?;
-    remielle_save::decode_player_save(&data)
+    let data = match fs::read(&path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("load_player_save: save file not found: {}", path.display());
+            return None;
+        }
+        Err(e) => {
+            eprintln!(
+                "load_player_save: failed to read save {}: {e}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match remielle_save::decode_player_save(&data) {
+        Some(save) => Some(save),
+        None => {
+            eprintln!(
+                "load_player_save: failed to decode (corrupt?) save {} ({} bytes)",
+                path.display(),
+                data.len()
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn render_stat_select_options(
@@ -50,11 +73,10 @@ pub(crate) fn render_sub_stat_rows(
     let mut rows = String::new();
     for idx in 0..4 {
         let (mut key, _base, add) = sub_props.get(idx).copied().unwrap_or((0, 0, 0));
-        if key == 0 {
-            if let Some(first) = options.first() {
+        if key == 0
+            && let Some(first) = options.first() {
                 key = *first;
             }
-        }
         rows.push_str(&format!(
             "<div><label>{}</label><select name=\"sub_key_{}\" {disabled}>{}</select></div>",
             t(locale, "disc.key"),

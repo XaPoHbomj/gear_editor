@@ -1,4 +1,9 @@
-use crate::{app_state::AppState, auth::html_escape_attr, i18n::Locale, i18n::t};
+use crate::{
+    app_state::AppState,
+    auth::{csrf_input, html_escape_attr, html_escape_text},
+    i18n::Locale,
+    i18n::t,
+};
 use std::{
     fs,
     path::{Path as FsPath, PathBuf},
@@ -16,6 +21,7 @@ pub(crate) fn render_client_updates_panel(
     server_host: &str,
     locale: Locale,
     is_admin: bool,
+    csrf: &str,
 ) -> String {
     let beta_patch = find_update_file(
         &state.root_dir.join("client_updates/Beta/Patch"),
@@ -81,6 +87,7 @@ pub(crate) fn render_client_updates_panel(
                         bar.style.width = "0%";
                         text.textContent = "0%";
                         var formData = new FormData();
+                        formData.append("_csrf", "{csrf}");
                         formData.append("file", file);
                     var xhr = new XMLHttpRequest();
                     var startTime = Date.now();
@@ -132,6 +139,7 @@ pub(crate) fn render_client_updates_panel(
                             wrap.style.display = "none";
                         }});
                         xhr.open("POST", "/admin/upload-update", true);
+                        xhr.setRequestHeader("x-csrf", "{csrf}");
                         xhr.send(formData);
                     }});
                 }})();
@@ -140,11 +148,12 @@ pub(crate) fn render_client_updates_panel(
             upload_label = t(locale, "updates.upload_beta_update"),
             upload_btn = t(locale, "updates.upload"),
             uploading = t(locale, "updates.uploading"),
+            csrf = csrf,
         );
     }
 
-    let beta_cards = render_update_group("Beta", &beta_items, true, server_host, locale, is_admin);
-    let prod_cards = render_update_group("Prod", &prod_items, false, server_host, locale, false);
+    let beta_cards = render_update_group("Beta", &beta_items, true, server_host, locale, is_admin, csrf);
+    let prod_cards = render_update_group("Prod", &prod_items, false, server_host, locale, false, csrf);
 
     format!(
         r#"<div style="display:grid; gap:16px;">
@@ -168,6 +177,7 @@ fn render_update_group(
     server_host: &str,
     locale: Locale,
     is_admin: bool,
+    csrf: &str,
 ) -> String {
     let no_file = t(locale, "updates.no_file");
     let unknown = t(locale, "updates.unknown");
@@ -202,8 +212,8 @@ fn render_update_group(
                                 {download_prefix} {name} {size}
                             </a>"#,
                     label = label,
-                    name = file.file_name,
-                    download_url = download_url,
+                    name = html_escape_text(&file.file_name),
+                    download_url = html_escape_attr(&download_url),
                     download_prefix = download_prefix,
                     size = format_file_size(file.size_bytes),
                 );
@@ -211,11 +221,13 @@ fn render_update_group(
                 if is_admin && title == "Beta" && label == t(locale, "updates.update") {
                     card_html.push_str(&format!(
                         r#"<form method="post" action="/admin/delete-update" style="display:flex; flex:0 0 auto;">
+                            {}
                             <input type="hidden" name="filename" value="{}" />
-                            <button type="submit" class="danger" style="padding:6px 10px; font-size:11px; white-space:nowrap;" onclick="return confirm('Delete {}?')">{}</button>
+                            <button type="submit" class="danger" style="padding:6px 10px; font-size:11px; white-space:nowrap;" onclick="return confirm('{}')">{}</button>
                         </form>"#,
+                        csrf_input(csrf),
                         html_escape_attr(&file.file_name),
-                        html_escape_attr(&file.file_name),
+                        html_escape_attr(t(locale, "updates.delete_confirm")),
                         delete_label,
                     ));
                 }
@@ -232,7 +244,7 @@ fn render_update_group(
                             <div style="margin-bottom: 6px; color: #b8c0cc;">{aria2c_desc}</div>
                             <code style="display: block; background: #0a0d11; padding: 6px; border-radius: 4px; font-family: monospace; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; overflow-wrap:anywhere; color: #6c9cff;">{}</code>
                         </div>"#,
-                        aria2c_command
+                        html_escape_text(&aria2c_command)
                     ));
                 }
 

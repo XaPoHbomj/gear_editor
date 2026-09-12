@@ -1,6 +1,6 @@
 use crate::{
     app_state::{AppState, active_server_selection, state_for_selected_server},
-    auth::html_escape_text,
+    auth::{csrf_input, html_escape_attr, html_escape_text},
     i18n::{Locale, locale_from_headers, t},
 };
 use axum::{
@@ -31,13 +31,11 @@ fn boss_image_base_name(image_path: &str) -> String {
 fn format_with_commas(n: i64) -> String {
     let s = n.to_string();
     let mut out = String::new();
-    let mut count = 0;
-    for c in s.chars().rev() {
+    for (count, c) in s.chars().rev().enumerate() {
         if count > 0 && count % 3 == 0 {
             out.push(',');
         }
         out.push(c);
-        count += 1;
     }
     out.chars().rev().collect()
 }
@@ -208,6 +206,8 @@ fn shiyu_render_monster_card(
         .get("name")
         .and_then(|n| n.as_str())
         .unwrap_or_else(|| t(locale, "common.unknown"));
+    let boss_name_esc = html_escape_text(boss_name);
+    let boss_name_attr = html_escape_attr(boss_name);
     let boss_image = monster
         .get("image")
         .and_then(|img| img.as_str())
@@ -220,7 +220,7 @@ fn shiyu_render_monster_card(
         );
         format!(
             r#"<img class="boss-inline-thumb" src="{}" alt="{}" style="width: 180px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
-            local_src, boss_name
+            html_escape_attr(&local_src), boss_name_attr
         )
     } else {
         String::new()
@@ -298,7 +298,7 @@ fn shiyu_render_monster_card(
             </div>
             {image_html}
         </div>"#,
-        boss_name = boss_name,
+        boss_name = boss_name_esc,
         hp = hp,
         atk = atk,
         def = def,
@@ -345,17 +345,17 @@ fn element_icon_path(element: &str) -> String {
     }
 }
 
-fn element_label(locale: Locale, element: &str) -> &str {
-    match (locale, element.to_lowercase().as_str()) {
-        (_, "fire") => "Fire",
-        (_, "ice") => "Ice",
-        (_, "electric") => "Electric",
-        (_, "ether") => "Ether",
-        (Locale::Ru, "physical") => "Физический",
-        (_, "physical") => "Physical",
-        (_, "wind") => "Wind",
-        _ => element,
-    }
+fn element_label(locale: Locale, element: &str) -> String {
+    let key = match element.to_lowercase().as_str() {
+        "fire" => "element.fire",
+        "ice" => "element.ice",
+        "electric" => "element.electric",
+        "ether" => "element.ether",
+        "physical" => "element.physical",
+        "wind" => "element.wind",
+        _ => return String::new(),
+    };
+    t(locale, key).to_string()
 }
 
 fn read_calendar_entrance_zones(state: &AppState) -> HashMap<u32, u32> {
@@ -398,6 +398,7 @@ pub(crate) fn render_da_shiyu_status(
     is_admin: bool,
     server_up: bool,
     is_prod: bool,
+    csrf: &str,
 ) -> String {
     let dummy_path = &state.dump_lang_dir(locale);
 
@@ -447,6 +448,7 @@ pub(crate) fn render_da_shiyu_status(
             hadal_id,
             is_admin,
             server_up,
+            csrf,
         ));
     }
 
@@ -462,18 +464,27 @@ pub(crate) fn render_da_shiyu_status(
     out
 }
 
-fn render_hadal_edit_form(server: u32, hadal_id: &str, locale: Locale, server_up: bool) -> String {
+fn render_hadal_edit_form(
+    server: u32,
+    hadal_id: &str,
+    locale: Locale,
+    server_up: bool,
+    csrf: &str,
+) -> String {
     let disabled_attr = if server_up { "" } else { " disabled" };
     format!(
         r#"<form method="post" action="/admin/update-hadal-zone" style="margin-top:10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;{dim}">
+            {csrf_input}
             <input type="hidden" name="server" value="{server}">
             <input type="hidden" name="hadal_id" value="{hadal_id}">
-            <input type="number" name="new_zone" placeholder="New ID" required{disabled_attr} style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
+            <input type="number" name="new_zone" placeholder="{zone_placeholder}" required{disabled_attr} style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
             <button type="submit"{disabled_attr} style="padding:5px 10px; border:0; border-radius:6px; background:#4c7dff; color:#fff; font-weight:600; font-size:12px; cursor:pointer;">{update_label}</button>
         </form>"#,
+        csrf_input = csrf_input(csrf),
         server = server,
         hadal_id = hadal_id,
         update_label = t(locale, "status.update_zone"),
+        zone_placeholder = t(locale, "status.zone_id"),
         disabled_attr = disabled_attr,
         dim = if server_up {
             ""
@@ -483,6 +494,7 @@ fn render_hadal_edit_form(server: u32, hadal_id: &str, locale: Locale, server_up
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_status_card(
     locale: Locale,
     zone_id: u32,
@@ -494,9 +506,10 @@ fn render_status_card(
     hadal_id: &str,
     is_admin: bool,
     server_up: bool,
+    csrf: &str,
 ) -> String {
     let admin_form = if is_admin {
-        render_hadal_edit_form(server, hadal_id, locale, server_up)
+        render_hadal_edit_form(server, hadal_id, locale, server_up, csrf)
     } else {
         String::new()
     };
@@ -514,7 +527,11 @@ fn render_status_card(
     }
 
     let (_, boss_names) = lookup_zone_detail(details_path, zone_id, kind, locale);
-    let boss_list = boss_names.join("<br>");
+    let boss_list = boss_names
+        .iter()
+        .map(|n| html_escape_text(n))
+        .collect::<Vec<_>>()
+        .join("<br>");
 
     format!(
         r#"<div class="card" style="text-decoration:none;color:inherit;position:relative;">
@@ -533,20 +550,18 @@ fn render_status_card(
 }
 
 fn extract_boss_names_from_zone(zone: &serde_json::Value, boss_names: &mut Vec<String>) {
-    if let Some(zone_name) = zone.get("name").and_then(|n| n.as_str()) {
-        if !zone_name.trim().is_empty() {
+    if let Some(zone_name) = zone.get("name").and_then(|n| n.as_str())
+        && !zone_name.trim().is_empty() {
             boss_names.push(zone_name.to_string());
         }
-    }
     if let Some(layer_room) = zone.get("layer_room").and_then(|r| r.as_object()) {
         for room in layer_room.values() {
             if let Some(monster_list) = room.get("monster_list").and_then(|m| m.as_object()) {
                 for monster in monster_list.values() {
-                    if let Some(monster_name) = monster.get("name").and_then(|n| n.as_str()) {
-                        if !monster_name.trim().is_empty() {
+                    if let Some(monster_name) = monster.get("name").and_then(|n| n.as_str())
+                        && !monster_name.trim().is_empty() {
                             boss_names.push(monster_name.to_string());
                         }
-                    }
                 }
             }
         }
@@ -559,14 +574,13 @@ fn lookup_zone_detail(
     _kind: &str,
     locale: Locale,
 ) -> (String, Vec<String>) {
-    if let Ok(content) = fs::read_to_string(details_path) {
-        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+    if let Ok(content) = fs::read_to_string(details_path)
+        && let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(entry) = data.get(zone_id.to_string()) {
-                if let Some(name) = entry.get("name").and_then(|n| n.as_str()) {
-                    if !name.is_empty() && name != "Trial" {
+                if let Some(name) = entry.get("name").and_then(|n| n.as_str())
+                    && !name.is_empty() && name != "Trial" {
                         return (name.to_string(), Vec::new());
                     }
-                }
                 let mut boss_names = Vec::new();
                 if let Some(modes) = entry.get("modes").and_then(|m| m.as_array()) {
                     for mode in modes {
@@ -613,7 +627,6 @@ fn lookup_zone_detail(
                 }
             }
         }
-    }
     (t(locale, "common.unknown").to_string(), Vec::new())
 }
 
@@ -748,6 +761,8 @@ pub(crate) async fn da_detail(
                     .get("name")
                     .and_then(|n| n.as_str())
                     .unwrap_or_else(|| t(locale, "common.unknown"));
+                let boss_name_esc = html_escape_text(boss_name);
+                let boss_name_attr = html_escape_attr(boss_name);
 
                 let boss_image = monster
                     .get("image")
@@ -762,7 +777,7 @@ pub(crate) async fn da_detail(
                     );
                     format!(
                         r#"<img class="boss-inline-thumb" src="{}" alt="{}" style="width: 220px; height: 100%; object-fit: cover; background: #10141d; border-radius: 8px; flex-shrink: 0;" />"#,
-                        local_src, boss_name
+                        html_escape_attr(&local_src), boss_name_attr
                     )
                 } else {
                     String::new()
@@ -837,7 +852,7 @@ pub(crate) async fn da_detail(
                         </div>
                         {image_html}
                     </div>"#,
-                    boss_name = boss_name,
+                    boss_name = boss_name_esc,
                     hp = hp,
                     base_hp = base_hp,
                     atk = atk,
@@ -890,7 +905,7 @@ pub(crate) async fn da_detail(
                         <h4 style="margin: 0 0 6px 0; color: #4c7dff;">{}</h4>
                         <p style="margin: 0; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</p>
                     </div>"#,
-                    display_title, rich_desc
+                    html_escape_text(display_title), rich_desc
                 ));
             }
             if !buffs_html.is_empty() {
@@ -912,6 +927,7 @@ pub(crate) async fn da_detail(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.png" />
   <title>{da_name} - Gear Editor</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
@@ -953,7 +969,7 @@ pub(crate) async fn da_detail(
 </body>
 </html>"#,
         lang = locale.lang_attr(),
-        da_name = da_name,
+        da_name = html_escape_text(&da_name),
         back_link = t(locale, "status.back"),
         id_label = t(locale, "common.id"),
         id = id,
@@ -975,13 +991,14 @@ pub(crate) async fn shiyu_detail(
     let dump_dir = state.dump_lang_dir(locale);
     let shiyu_details_path = dump_dir.join("shiyu_details.json");
 
-    if let Ok(content) = fs::read_to_string(&shiyu_details_path) {
-        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(shiyu_data) = data.get(id.to_string()) {
+    if let Ok(content) = fs::read_to_string(&shiyu_details_path)
+        && let Ok(data) = serde_json::from_str::<serde_json::Value>(&content)
+            && let Some(shiyu_data) = data.get(id.to_string()) {
                 let shiyu_name = shiyu_data
                     .get("name")
                     .and_then(|n| n.as_str())
                     .unwrap_or_else(|| t(locale, "common.unknown"));
+                let shiyu_name = html_escape_text(shiyu_name);
                 let max_stage = shiyu_max_stage(shiyu_data);
                 let selected_floor = query.floor.unwrap_or(max_stage).clamp(1, max_stage);
                 let floor_zones = shiyu_stage_zones(shiyu_data, selected_floor);
@@ -1016,8 +1033,8 @@ pub(crate) async fn shiyu_detail(
                     .or_else(|| floor_zones.first().map(|(_, zone)| zone.clone()));
 
                 let mut buff_cards = String::new();
-                if !(is_new_style && selected_floor == 5) {
-                    if let Some(zone) = buff_zone {
+                if !(is_new_style && selected_floor == 5)
+                    && let Some(zone) = buff_zone {
                         let selectable_buffs = zone
                             .get("layer_buff")
                             .and_then(|b| b.as_object())
@@ -1049,7 +1066,7 @@ pub(crate) async fn shiyu_detail(
                                 <h4 style="margin: 0 0 6px 0; color: #4c7dff;">{}</h4>
                                 <p style="margin: 0; font-size: 12px; color: #9aa4b2; line-height: 1.4;">{}</p>
                             </div>"#,
-                                display_title, rich_desc
+                                html_escape_text(display_title), rich_desc
                             ));
                         }
 
@@ -1064,7 +1081,6 @@ pub(crate) async fn shiyu_detail(
                             );
                         }
                     }
-                }
 
                 let mut fight_cards = String::new();
                 let mut fight_index = 1u32;
@@ -1097,6 +1113,7 @@ pub(crate) async fn shiyu_detail(
                                 .map(|s| s.to_string())
                         })
                         .unwrap_or_else(|| format!("{} {}", t(locale, "shiyu.room"), fight_index));
+                    let room_title = html_escape_text(&room_title);
                     let waves_num = room.get("waves_num").and_then(|v| v.as_u64()).unwrap_or(0);
                     let room_weakness = room.get("monster_weakness").and_then(|w| w.as_object());
 
@@ -1156,7 +1173,7 @@ pub(crate) async fn shiyu_detail(
                                     <strong style="color: #4c7dff;">{}</strong>
                                     <div style="font-size: 12px; color: #9aa4b2; line-height: 1.4; margin-top: 4px;">{}</div>
                                 </div>"#,
-                                display_title, rich_desc
+                                html_escape_text(display_title), rich_desc
                             ));
                         }
                         html
@@ -1182,6 +1199,7 @@ pub(crate) async fn shiyu_detail(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.png" />
   <title>{shiyu_name} - Gear Editor</title>
   <style>
     body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }}
@@ -1236,8 +1254,6 @@ pub(crate) async fn shiyu_detail(
 
                 return Html(html).into_response();
             }
-        }
-    }
 
     Html(t(locale, "shiyu.not_found").to_string()).into_response()
 }

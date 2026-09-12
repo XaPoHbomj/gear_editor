@@ -6,7 +6,7 @@ Web admin panel for the remielle game server. All mutations are sent to a runnin
 
 | Panel | Edit | Create | Delete | Card view |
 |-------|------|--------|--------|-----------|
-| Agents (avatars) | Level, exp, rank, talents, skills, skin, awakening, favorite, show-weapon | No | No | Yes |
+| Agents (avatars) | Level, exp, rank, talents, skills, skin, awakening, favorite, show-weapon | Yes (unlock any character from the dump roster) | No | Yes |
 | W-Engines (weapons) | Level, star, refine | Yes | No | Yes |
 | Drive Discs | Main/sub stats, level, star | Yes, single & bulk generate | Yes, single & delete-all-unlocked | Yes |
 | DA/Shiyu Status | Zone ID via ctl (admin only) | No | No | Detail view |
@@ -19,8 +19,8 @@ All edits require the player to be **online** on the selected server. Mutations 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌─────────────────────────────────┐
 │   Browser    │────▶│ gear_editor  │────▶│ remielle gamesv (ctl UDP port)  │
-│  (all HTML   │     │ (Rust+Axum)  │     │ modAvatarMeta / createWeapon /  │
-│   inline)    │◀────│ localhost:   │     │ modEquip / modHadalZone / etc.  │
+│  (all HTML   │     │ (Rust+Axum)  │     │ modAvatarMeta / createAvatar /  │
+│   inline)    │◀────│ localhost:   │     │ createWeapon / modEquip / etc.  │
 │              │     │   3001       │     └─────────────────────────────────┘
 └──────────────┘     └──────┬───────┘
                             │ (read-only)
@@ -57,6 +57,7 @@ All edits go through the ctl UDP protocol immediately. Each save/update button s
 
 | Action | Ctl Command | Target |
 |--------|-------------|--------|
+| Add agent | `createAvatar` | Server's control port |
 | Agent level | `modAvatarMeta` (field=0) | Server's control port |
 | Agent exp | `modAvatarMeta` (field=1) | Server's control port |
 | Agent rank | `modAvatarMeta` (field=2) | Server's control port |
@@ -171,7 +172,7 @@ src/
   routes/
     mod.rs
     auth.rs        # Login/register pages, login/logout, switch-server
-    avatar.rs      # Agent edit, update, cards
+    avatar.rs      # Agent edit, add (unlock), update, cards
     weapon.rs      # Weapon edit/new, update, add, cards
     equip.rs       # Disc edit/new/generate/delete, cards
     challenges.rs  # DA/Shiyu details + status tab

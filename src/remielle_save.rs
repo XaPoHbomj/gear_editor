@@ -316,7 +316,7 @@ fn decode_weapon_save(buf: &[u8]) -> WeaponItemSave {
         pos = new_pos;
         let field = tag >> 3;
         match field {
-            1 | 2 | 3 | 4 | 5 => {
+            1..=5 => {
                 if let Some((v, np)) = read_varint(buf, pos) {
                     pos = np;
                     match field {
@@ -369,7 +369,7 @@ fn decode_equip_property(buf: &[u8]) -> EquipProperty {
         pos = new_pos;
         let field = tag >> 3;
         match field {
-            1 | 2 | 3 => {
+            1..=3 => {
                 if let Some((v, np)) = read_varint(buf, pos) {
                     pos = np;
                     match field {
@@ -560,10 +560,8 @@ fn decode_hall_save(buf: &[u8]) -> HallSave {
                 hall.section_id = v as u32;
                 pos = np;
             }
-        } else {
-            if !skip_field(tag & 7, buf, &mut pos) {
-                break;
-            }
+        } else if !skip_field(tag & 7, buf, &mut pos) {
+            break;
         }
     }
     hall
@@ -588,7 +586,7 @@ fn read_varint(buf: &[u8], pos: usize) -> Option<(u64, usize)> {
     Some((result, p))
 }
 
-fn read_ld<'a>(buf: &'a [u8], pos: usize) -> Option<(&'a [u8], usize)> {
+fn read_ld(buf: &[u8], pos: usize) -> Option<(&[u8], usize)> {
     let (len, np) = read_varint(buf, pos)?;
     let end = np + len as usize;
     if end > buf.len() {
@@ -638,7 +636,7 @@ mod tests {
         // actually emits for an ArrayList<u32>. Values: [12,12,12,12,12,7,12].
         let mut item = Vec::new();
         for &v in &[12u32, 12, 12, 12, 12, 7, 12] {
-            item.extend_from_slice(&[(8u8 << 3) | 0]); // field 8, wire 0
+            item.extend_from_slice(&[8u8 << 3]); // field 8, wire 0
             item.extend_from_slice(&[v as u8]); // varint < 128
         }
         let save = decode_avatar_save(&item);
@@ -659,7 +657,7 @@ mod tests {
     fn avatar_equipment_uids_decode_repeated_wire0() {
         let mut item = Vec::new();
         for &v in &[1001u32, 2002] {
-            item.extend_from_slice(&[(11u8 << 3) | 0]);
+            item.extend_from_slice(&[11u8 << 3]);
             item.extend_from_slice(&varint_bytes(v));
         }
         let save = decode_avatar_save(&item);

@@ -2,8 +2,9 @@ use crate::{
     AppState,
     app_state::parse_server_selection,
     auth::{
-        get_session, html_escape_attr, html_escape_text, insert_session, redirect_to_login,
-        remove_session, sanitize_next_path, url_encode_component, validate_login,
+        csrf_ok, get_session, html_escape_attr, html_escape_text, insert_session,
+        redirect_to_login, remove_session, sanitize_next_path, secure_cookie_flag,
+        url_encode_component, validate_login,
     },
     i18n::{Locale, locale_from_headers, t},
     sdk,
@@ -11,7 +12,7 @@ use crate::{
 };
 use axum::{
     extract::{Form, OriginalUri, Query, State},
-    http::{HeaderMap, HeaderValue, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -33,6 +34,12 @@ pub(crate) struct LoginQuery {
 pub(crate) struct SwitchServerQuery {
     target: Option<String>,
     next: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct LogoutForm {
+    #[serde(rename = "_csrf")]
+    csrf: String,
 }
 
 pub(crate) async fn login_page(
@@ -69,6 +76,7 @@ fn render_login_form(locale: Locale, next: &str, error: Option<&str>) -> String 
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.png" />
   <title>{title}</title>
   <style>
         body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; margin: 0; }}
@@ -149,6 +157,7 @@ fn render_register_form(locale: Locale, next: &str, error: Option<&str>) -> Stri
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.png" />
   <title>{title}</title>
   <style>
         body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; margin: 0; }}
@@ -202,6 +211,7 @@ pub(crate) async fn login(
 ) -> impl IntoResponse {
     let _locale = locale_from_headers(&headers);
     let username = payload.username.trim().to_string();
+    let secure = secure_cookie_flag(&headers);
     let response: Response = match validate_login(&state, &username, &payload.password) {
         Ok(Some((session, _is_admin))) => {
             let uid = session.uid;
@@ -213,8 +223,9 @@ pub(crate) async fn login(
             headers.insert(
                 header::SET_COOKIE,
                 format!(
-                    "ge_session={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000",
-                    session_id
+                    "ge_session={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000{secure}",
+                    sid = session_id,
+                    secure = secure,
                 )
                 .parse()
                 .unwrap(),
@@ -310,7 +321,12 @@ pub(crate) async fn switch_server(
         .unwrap_or_else(|| "/dashboard".to_string());
 
     let mut response = Redirect::to(&next).into_response();
-    let value = format!("gear_server={}; Path=/; SameSite=Lax", sel.cookie_value());
+    let secure = secure_cookie_flag(&headers);
+    let value = format!(
+        "gear_server={server_value}; Path=/; SameSite=Lax{secure}",
+        server_value = sel.cookie_value(),
+        secure = secure,
+    );
     if let Ok(header_value) = HeaderValue::from_str(&value) {
         response
             .headers_mut()
@@ -320,10 +336,17 @@ pub(crate) async fn switch_server(
     response
 }
 
-pub(crate) async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+pub(crate) async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<LogoutForm>,
+) -> impl IntoResponse {
     let mut response = Redirect::to("/").into_response();
 
     if let Some((session_id, session)) = get_session(&headers) {
+        if !csrf_ok(&session_id, Some(&payload.csrf)) {
+            return (StatusCode::BAD_REQUEST, Html("Invalid CSRF token")).into_response();
+        }
         audit_log(
             &state.root_dir,
             &session.username,
@@ -334,11 +357,15 @@ pub(crate) async fn logout(State(state): State<AppState>, headers: HeaderMap) ->
         remove_session(&session_id);
     }
 
+    let secure = secure_cookie_flag(&headers);
     response.headers_mut().insert(
         header::SET_COOKIE,
-        "ge_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
-            .parse()
-            .unwrap(),
+        format!(
+            "ge_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{secure}",
+            secure = secure,
+        )
+        .parse()
+        .unwrap(),
     );
     response
 }

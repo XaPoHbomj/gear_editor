@@ -17,12 +17,19 @@ pub(crate) struct HakushinData {
     pub(crate) weapons: HashMap<u32, HakushinEntry>,
     pub(crate) discs: HashMap<u32, HakushinEntry>,
     pub(crate) weapon_info: HashMap<u32, WeaponInfo>,
+    pub(crate) avatar_info: HashMap<u32, AvatarInfo>,
 }
 
 #[derive(Default, Clone)]
 pub(crate) struct WeaponInfo {
     pub(crate) weapon_type: String,
     pub(crate) rarity: u32,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct AvatarInfo {
+    pub(crate) rarity: u32,
+    pub(crate) element: u32,
 }
 
 #[derive(Default, Clone)]
@@ -90,6 +97,7 @@ pub(crate) fn load_hakushin_data(state: &AppState, locale: Locale) -> HakushinDa
             &["icon_local", "icon"],
         ),
         weapon_info: load_weapon_info(&lang_dir.join("weapon_details.json")),
+        avatar_info: load_avatar_info(&lang_dir.join("characters.json")),
     };
 
     cache.insert(cache_key, data.clone());
@@ -108,12 +116,11 @@ fn hakushin_data_fingerprint(dump_dir: &FsPath) -> u64 {
         path.to_string_lossy().hash(&mut hasher);
         if let Ok(metadata) = fs::metadata(&path) {
             metadata.len().hash(&mut hasher);
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+            if let Ok(modified) = metadata.modified()
+                && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
                     duration.as_secs().hash(&mut hasher);
                     duration.subsec_nanos().hash(&mut hasher);
                 }
-            }
         }
     }
     hasher.finish()
@@ -127,12 +134,15 @@ fn load_hakushin_list(
 ) -> HashMap<u32, HakushinEntry> {
     let mut result = HashMap::new();
     let Ok(data) = fs::read_to_string(path) else {
+        eprintln!("load_hakushin_list: cannot read dump file: {}", path.display());
         return result;
     };
     let Ok(json) = serde_json::from_str::<JsonValue>(&data) else {
+        eprintln!("load_hakushin_list: invalid JSON in dump: {}", path.display());
         return result;
     };
     let Some(items) = json.as_array() else {
+        eprintln!("load_hakushin_list: unexpected shape (not an array): {}", path.display());
         return result;
     };
 
@@ -147,12 +157,11 @@ fn load_hakushin_list(
             .to_string();
         let mut image_local = None;
         for key in image_keys {
-            if let Some(value) = item.get(*key).and_then(|v| v.as_str()) {
-                if let Some(local_path) = normalize_image_reference(root_dir, value) {
+            if let Some(value) = item.get(*key).and_then(|v| v.as_str())
+                && let Some(local_path) = normalize_image_reference(root_dir, value) {
                     image_local = Some(local_path);
                     break;
                 }
-            }
         }
 
         result.insert(id as u32, HakushinEntry { name, image_local });
@@ -164,12 +173,15 @@ fn load_hakushin_list(
 fn load_weapon_info(path: &FsPath) -> HashMap<u32, WeaponInfo> {
     let mut result = HashMap::new();
     let Ok(data) = fs::read_to_string(path) else {
+        eprintln!("load_weapon_info: cannot read dump file: {}", path.display());
         return result;
     };
     let Ok(json) = serde_json::from_str::<JsonValue>(&data) else {
+        eprintln!("load_weapon_info: invalid JSON in dump: {}", path.display());
         return result;
     };
     let Some(obj) = json.as_object() else {
+        eprintln!("load_weapon_info: unexpected shape (not an object): {}", path.display());
         return result;
     };
     for (_key, item) in obj {
@@ -191,6 +203,31 @@ fn load_weapon_info(path: &FsPath) -> HashMap<u32, WeaponInfo> {
                 rarity,
             },
         );
+    }
+    result
+}
+
+fn load_avatar_info(path: &FsPath) -> HashMap<u32, AvatarInfo> {
+    let mut result = HashMap::new();
+    let Ok(data) = fs::read_to_string(path) else {
+        eprintln!("load_avatar_info: cannot read dump file: {}", path.display());
+        return result;
+    };
+    let Ok(json) = serde_json::from_str::<JsonValue>(&data) else {
+        eprintln!("load_avatar_info: invalid JSON in dump: {}", path.display());
+        return result;
+    };
+    let Some(items) = json.as_array() else {
+        eprintln!("load_avatar_info: unexpected shape (not an array): {}", path.display());
+        return result;
+    };
+    for item in items {
+        let Some(id) = item.get("id").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let rarity = item.get("rank").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let element = item.get("element").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        result.insert(id as u32, AvatarInfo { rarity, element });
     }
     result
 }

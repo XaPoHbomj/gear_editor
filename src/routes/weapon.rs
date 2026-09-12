@@ -1,15 +1,15 @@
 use crate::{
-    app_state::{AppState, state_with_active_server},
-    auth::{get_session, html_escape_attr, redirect_to_login},
+    app_state::AppState,
+    auth::{AuthContext, csrf_input, html_escape_attr},
     ctl,
     data::hakushin::{load_hakushin_data, to_asset_url},
-    i18n::{Locale, locale_from_headers, t},
-    player_state::{load_player_save, resolve_player_uid},
-    utils::{audit_log, shared_page_css, svg_data_uri},
+    i18n::{Locale, t},
+    player_state::load_player_save,
+    utils::{audit_log, page_shell, svg_data_uri, u8_from_u32, u16_from_u32},
 };
 use axum::{
-    extract::{Form, OriginalUri, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Form, Path, Query},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect},
 };
 use serde::Deserialize;
@@ -19,12 +19,14 @@ use std::collections::HashMap;
 pub(crate) struct WeaponUpdateForm {
     level: u32,
     refine_level: u32,
+    _csrf: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct AddWeaponForm {
     pub(crate) weapon_id: u32,
     pub(crate) refine_level: u32,
+    _csrf: String,
 }
 
 #[derive(Deserialize)]
@@ -34,22 +36,17 @@ pub(crate) struct WeaponFilterQuery {
 }
 
 pub(crate) async fn weapon_edit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    auth: AuthContext,
     Path(weapon_uid): Path<u32>,
-    original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
 
-    let locale = locale_from_headers(&headers);
-    let state = state_with_active_server(&state, &headers);
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-
-    let Some(save) = load_player_save(&state, uid) else {
+    let Some(save) = load_player_save(active_state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
     };
 
@@ -60,8 +57,8 @@ pub(crate) async fn weapon_edit(
     let level = weapon.level;
     let refine_level = weapon.refine;
     let weapon_id = weapon.id;
-    let online = ctl::player_is_online(&state.active_ctl_addr(&headers), uid);
-    let hakushin = load_hakushin_data(&state, locale);
+    let online = ctl::player_is_online(&active_state.ctl_addr, uid);
+    let hakushin = load_hakushin_data(active_state, locale);
     let weapon_name = hakushin
         .weapons
         .get(&weapon_id)
@@ -74,18 +71,8 @@ pub(crate) async fn weapon_edit(
         .map(to_asset_url)
         .unwrap_or_else(|| svg_data_uri(&weapon_name));
 
-    let body = format!(
-        r#"<!doctype html>
-<html lang="{lang}">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{edit_title}</title>
-  <style>{shared_css}</style>
-</head>
-<body>
-  <div class="container">
-        <div class="hero">
+    let inner = format!(
+        r#"        <div class="hero">
             <img src="{weapon_img}" alt="{weapon_name}" />
             <div>
                 <h1>{edit_title} {weapon_name}</h1>
@@ -93,18 +80,16 @@ pub(crate) async fn weapon_edit(
             </div>
         </div>
     <form method="post">
+      {csrf}
       <label>{level_label}</label>
       <input name="level" type="number" min="1" value="{level}" {disabled} />
       <label>{overclock_label}</label>
-      <input name="refine_level" type="number" min="0" value="{refine_level}" {disabled} />
+      <input name="refine_level" type="number" min="1" value="{refine_level}" {disabled} />
       <div class="form-actions">
         <a href="/dashboard?tab=weapons" class="back">{back_label}</a>
         {submit}
       </div>
-    </form>
-  </div>
-</body>
-</html>"#,
+    </form>"#,
         weapon_uid = weapon_uid,
         weapon_id = weapon_id,
         weapon_name = html_escape_attr(&weapon_name),
@@ -123,42 +108,56 @@ pub(crate) async fn weapon_edit(
         level_label = t(locale, "weapon.level"),
         overclock_label = t(locale, "weapon.overclock"),
         back_label = t(locale, "weapon.back"),
-        lang = locale.lang_attr(),
-        shared_css = shared_page_css(),
+        csrf = csrf_input(&auth.session_id),
     );
 
-    Html(body).into_response()
+    Html(page_shell(t(locale, "weapon.edit"), locale, &inner)).into_response()
 }
 
 pub(crate) async fn weapon_update(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    auth: AuthContext,
     Path(weapon_uid): Path<u32>,
-    original_uri: OriginalUri,
     Form(payload): Form<WeaponUpdateForm>,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    if let Err(response) = auth.require_csrf(&payload._csrf) {
+        return response;
+    }
+
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
 
-    let locale = locale_from_headers(&headers);
-    let state = state_with_active_server(&state, &headers);
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-
-    let addr = state.active_ctl_addr(&headers);
+    let addr = active_state.ctl_addr.clone();
     if !ctl::player_is_online(&addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
+
+    // Ownership check: the weapon must belong to this player's save.
+    let belongs = load_player_save(active_state, uid)
+        .map(|s| s.weapon.iter().any(|w| w.uid == weapon_uid))
+        .unwrap_or(false);
+    if !belongs {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "weapon.not_found"))).into_response();
+    }
+
+    // Server-side range validation instead of silent `as u8` truncation.
+    let Some(level) = u8_from_u32(payload.level).filter(|&l| (1..=60).contains(&l)) else {
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "weapon.level_out_of_range"))).into_response();
+    };
+    let Some(refine) = u8_from_u32(payload.refine_level).filter(|&r| (1..=5).contains(&r)) else {
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "weapon.refine_out_of_range"))).into_response();
+    };
 
     if let Err(e) = ctl::mod_weapon(
         &addr,
         uid,
         weapon_uid,
-        payload.level as u8,
+        level,
         5,
-        payload.refine_level as u8,
+        refine,
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
@@ -170,29 +169,24 @@ pub(crate) async fn weapon_update(
 }
 
 pub(crate) async fn weapon_new(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    auth: AuthContext,
     Query(query): Query<WeaponFilterQuery>,
-    original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
-
-    let locale = locale_from_headers(&headers);
-    let state = state_with_active_server(&state, &headers);
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-    if !ctl::player_is_online(&state.active_ctl_addr(&headers), uid) {
+    if !ctl::player_is_online(&active_state.ctl_addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
 
     let filter_class = query.class.unwrap_or_default();
     let filter_rarity = query.rarity.unwrap_or_default();
-    let options = render_weapon_select_options(&state, 0, locale, &filter_class, &filter_rarity);
+    let options = render_weapon_select_options(active_state, 0, locale, &filter_class, &filter_rarity);
 
-    let hakushin = load_hakushin_data(&state, locale);
+    let hakushin = load_hakushin_data(active_state, locale);
     let weapon_images: HashMap<u32, String> = hakushin
         .weapons
         .iter()
@@ -208,18 +202,8 @@ pub(crate) async fn weapon_new(
     let weapon_images_json =
         serde_json::to_string(&weapon_images).unwrap_or_else(|_| "{}".to_string());
 
-    let body = format!(
-        r#"<!doctype html>
-<html lang="{lang}">
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{new_title}</title>
-    <style>{shared_css}</style>
-</head>
-<body>
-    <div class="container">
-        <h1>{new_title}</h1>
+    let inner = format!(
+        r#"        <h1>{new_title}</h1>
         <form method="get" style="margin-bottom:12px;">
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
@@ -233,6 +217,7 @@ pub(crate) async fn weapon_new(
             </div>
         </form>
         <form method="post">
+            {csrf}
             <div>
                 <img id="weapon_preview" class="preview-img" />
                 <label>{weapon_label}</label>
@@ -243,12 +228,11 @@ pub(crate) async fn weapon_new(
             <div class="row">
                 <div>
                     <label>{refine_label}</label>
-                    <input name="refine_level" type="number" min="0" value="1" />
+                    <input name="refine_level" type="number" min="1" value="1" />
                 </div>
             </div>
             <button type="submit">{create_label}</button>
         </form>
-    </div>
     <script>
     var w = {weapon_images_json};
     var p = document.getElementById("weapon_preview");
@@ -258,9 +242,7 @@ pub(crate) async fn weapon_new(
         if (u) {{ p.src = u; p.style.display = "block"; }}
         else {{ p.style.display = "none"; }}
     }});
-    </script>
-</body>
-</html>"#,
+    </script>"#,
         options = options,
         weapon_images_json = weapon_images_json,
         new_title = t(locale, "weapon.new"),
@@ -271,41 +253,48 @@ pub(crate) async fn weapon_new(
         rarity_label = t(locale, "weapon.filter_rarity"),
         class_opts = render_weapon_filter_class_opts(locale, &filter_class),
         rarity_opts = render_weapon_filter_rarity_opts(locale, &filter_rarity),
-        lang = locale.lang_attr(),
-        shared_css = shared_page_css(),
+        csrf = csrf_input(&auth.session_id),
     );
 
-    Html(body).into_response()
+    Html(page_shell(t(locale, "weapon.new"), locale, &inner)).into_response()
 }
 
 pub(crate) async fn weapon_add(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
+    auth: AuthContext,
     Form(payload): Form<AddWeaponForm>,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    if let Err(response) = auth.require_csrf(&payload._csrf) {
+        return response;
+    }
+
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let session = &auth.session;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
 
-    let locale = locale_from_headers(&headers);
-    let state = state_with_active_server(&state, &headers);
-    let Some(uid) = resolve_player_uid(&state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-
-    let addr = state.active_ctl_addr(&headers);
+    let addr = active_state.ctl_addr.clone();
     if !ctl::player_is_online(&addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
 
+    // Server-side range validation instead of silent `as u16`/`as u8`.
+    let Some(weapon_id) = u16_from_u32(payload.weapon_id) else {
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "weapon.id_out_of_range"))).into_response();
+    };
+    let Some(refine) = u8_from_u32(payload.refine_level).filter(|&r| (1..=5).contains(&r)) else {
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "weapon.refine_out_of_range"))).into_response();
+    };
+
     if let Err(e) = ctl::create_weapon(
         &addr,
         uid,
-        payload.weapon_id as u16,
+        weapon_id,
         60,
         5,
-        payload.refine_level as u8,
+        refine,
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
@@ -314,7 +303,7 @@ pub(crate) async fn weapon_add(
     }
 
     audit_log(
-        &state.root_dir,
+        &active_state.root_dir,
         &session.username,
         session.uid,
         "weapon_add",
@@ -342,11 +331,10 @@ pub(crate) fn render_weapon_cards(
 
             let info = hakushin.weapon_info.get(&weapon_id);
 
-            if !filter_class.is_empty() {
-                if info.map(|i| i.weapon_type.as_str()).unwrap_or("") != filter_class {
+            if !filter_class.is_empty()
+                && info.map(|i| i.weapon_type.as_str()).unwrap_or("") != filter_class {
                     continue;
                 }
-            }
             if !filter_rarity.is_empty() {
                 let rarity_str = match info.map(|i| i.rarity).unwrap_or(0) {
                     4 => "s",
@@ -519,11 +507,10 @@ fn render_weapon_select_options(
         .iter()
         .filter(|(id, _)| {
             let info = hakushin.weapon_info.get(id);
-            if !filter_class.is_empty() {
-                if info.map(|i| i.weapon_type.as_str()).unwrap_or("") != filter_class {
+            if !filter_class.is_empty()
+                && info.map(|i| i.weapon_type.as_str()).unwrap_or("") != filter_class {
                     return false;
                 }
-            }
             if !filter_rarity.is_empty() {
                 let rarity_str = match info.map(|i| i.rarity).unwrap_or(0) {
                     4 => "s",

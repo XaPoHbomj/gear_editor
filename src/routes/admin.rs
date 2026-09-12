@@ -1,12 +1,11 @@
 use crate::{
-    app_state::{AppState, state_for_selected_server},
-    auth::{get_session, is_admin, redirect_to_login},
+    auth::{AuthContext, csrf_ok},
     ctl,
-    i18n::{locale_from_headers, t},
+    i18n::t,
     utils::audit_log,
 };
 use axum::{
-    extract::{Multipart, OriginalUri, State},
+    extract::{Multipart, Query},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect},
 };
@@ -15,6 +14,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub(crate) struct DeleteForm {
     filename: String,
+    _csrf: String,
 }
 
 #[derive(Deserialize)]
@@ -22,20 +22,24 @@ pub(crate) struct UpdateHadalZoneForm {
     server: u32,
     hadal_id: String,
     new_zone: u32,
+    _csrf: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UploadQuery {
+    _csrf: Option<String>,
 }
 
 pub(crate) async fn admin_update_hadal_zone(
-    State(state): State<AppState>,
+    auth: AuthContext,
     headers: HeaderMap,
-    original_uri: OriginalUri,
     axum::extract::Form(payload): axum::extract::Form<UpdateHadalZoneForm>,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0).into_response();
-    };
-
-    if !is_admin(&session) {
+    if !auth.is_admin() {
         return (StatusCode::FORBIDDEN, Html("Forbidden")).into_response();
+    }
+    if let Err(response) = auth.require_csrf(&payload._csrf) {
+        return response;
     }
 
     let sel = crate::app_state::active_server_selection(&headers);
@@ -76,11 +80,11 @@ pub(crate) async fn admin_update_hadal_zone(
         }
     };
 
-    let active_state = state_for_selected_server(&state, sel);
+    let active_state = &auth.state;
     let addr = active_state.ctl_addr.clone();
 
     if !ctl::server_reachable(&addr) {
-        return Html(t(locale_from_headers(&headers), "player.offline")).into_response();
+        return Html(t(auth.locale, "player.offline")).into_response();
     }
 
     if let Err(e) = ctl::mod_hadal_entrance(&addr, entrance_id, payload.new_zone) {
@@ -88,9 +92,9 @@ pub(crate) async fn admin_update_hadal_zone(
     }
 
     audit_log(
-        &state.root_dir,
-        &session.username,
-        session.uid,
+        &active_state.root_dir,
+        &auth.session.username,
+        auth.session.uid,
         "update_hadal_zone",
         &format!(
             "server={} {} -> {}",
@@ -98,8 +102,7 @@ pub(crate) async fn admin_update_hadal_zone(
         ),
     );
 
-    let _locale = locale_from_headers(&headers);
-    Redirect::to(&format!("/dashboard?tab=status")).into_response()
+    Redirect::to("/dashboard?tab=status").into_response()
 }
 
 const MIN_FREE_SPACE: u64 = 1024 * 1024 * 1024;
@@ -116,21 +119,30 @@ fn safe_upload_name(file_name: &str) -> Option<String> {
 }
 
 pub(crate) async fn admin_upload_update(
-    State(state): State<AppState>,
+    auth: AuthContext,
     headers: HeaderMap,
-    original_uri: OriginalUri,
+    Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0).into_response();
-    };
-    let locale = locale_from_headers(&headers);
+    let locale = auth.locale;
 
-    if !is_admin(&session) {
+    if !auth.is_admin() {
         return (StatusCode::FORBIDDEN, Html("Forbidden")).into_response();
     }
 
-    let update_dir = state.root_dir.join("client_updates/Beta/Update");
+    let header_csrf = headers
+        .get("x-csrf")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let mut csrf_valid = header_csrf
+        .as_deref()
+        .is_some_and(|v| csrf_ok(&auth.session_id, Some(v)))
+        || query
+            ._csrf
+            .as_deref()
+            .is_some_and(|v| csrf_ok(&auth.session_id, Some(v)));
+
+    let update_dir = auth.state.root_dir.join("client_updates/Beta/Update");
     std::fs::create_dir_all(&update_dir).ok();
 
     match fs2::available_space(&update_dir) {
@@ -152,9 +164,18 @@ pub(crate) async fn admin_upload_update(
     let mut saved = false;
     let mut saved_name = String::new();
     while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("_csrf") {
+            if let Ok(text) = field.text().await {
+                csrf_valid |= csrf_ok(&auth.session_id, Some(&text));
+            }
+            continue;
+        }
         let Some(raw_name) = field.file_name().map(|s| s.to_string()) else {
             continue;
         };
+        if !csrf_valid {
+            return (StatusCode::BAD_REQUEST, Html("Invalid CSRF token")).into_response();
+        }
         let Some(file_name) = safe_upload_name(&raw_name) else {
             continue;
         };
@@ -215,9 +236,9 @@ pub(crate) async fn admin_upload_update(
     }
 
     audit_log(
-        &state.root_dir,
-        &session.username,
-        session.uid,
+        &auth.state.root_dir,
+        &auth.session.username,
+        auth.session.uid,
         "upload_update",
         &format!("uploaded {}", saved_name),
     );
@@ -226,29 +247,38 @@ pub(crate) async fn admin_upload_update(
 }
 
 pub(crate) async fn admin_delete_update(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
+    auth: AuthContext,
     axum::extract::Form(payload): axum::extract::Form<DeleteForm>,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0).into_response();
-    };
-
-    if !is_admin(&session) {
+    if !auth.is_admin() {
         return (StatusCode::FORBIDDEN, Html("Forbidden")).into_response();
     }
-
-    let dest = state
-        .root_dir
-        .join("client_updates/Beta/Update")
-        .join(&payload.filename);
-
-    if !dest.starts_with(state.root_dir.join("client_updates")) || !dest.exists() {
-        return (StatusCode::NOT_FOUND, Html("File not found")).into_response();
+    if let Err(response) = auth.require_csrf(&payload._csrf) {
+        return response;
     }
 
-    if let Err(e) = tokio::fs::remove_file(&dest).await {
+    let Some(filename) = safe_upload_name(&payload.filename) else {
+        return (StatusCode::BAD_REQUEST, Html("Invalid filename")).into_response();
+    };
+
+    let updates_root = auth.state.root_dir.join("client_updates");
+    let dest = updates_root.join("Beta/Update").join(&filename);
+
+    // Canonicalize both sides so `..` components in an attacker-supplied name
+    // cannot escape the updates directory via a lexical prefix check.
+    let canonical_dest = match std::fs::canonicalize(&dest) {
+        Ok(path) => path,
+        Err(_) => return (StatusCode::NOT_FOUND, Html("File not found")).into_response(),
+    };
+    let canonical_root = match std::fs::canonicalize(&updates_root) {
+        Ok(path) => path,
+        Err(_) => return (StatusCode::NOT_FOUND, Html("File not found")).into_response(),
+    };
+    if !canonical_dest.starts_with(&canonical_root) {
+        return (StatusCode::BAD_REQUEST, Html("Invalid filename")).into_response();
+    }
+
+    if let Err(e) = tokio::fs::remove_file(&canonical_dest).await {
         return Html(format!("Failed to delete file: {}", e)).into_response();
     }
 

@@ -119,13 +119,6 @@ impl AppState {
             .unwrap_or(1)
     }
 
-    /// Address of the ctl port for the currently selected server. The caller
-    /// must pass a state already scoped via `state_with_active_server` /
-    /// `state_for_selected_server`, which sets `ctl_addr` to the resolved port.
-    pub(crate) fn active_ctl_addr(&self, _headers: &HeaderMap) -> String {
-        self.ctl_addr.clone()
-    }
-
     pub(crate) fn read_version(&self, sel: ServerSelection) -> String {
         read_version_from_dir(&self.server_state_dir(sel.is_prod, sel.server_num))
     }
@@ -259,14 +252,14 @@ mod tests {
     }
 
     #[test]
-    fn active_ctl_addr_not_double_incremented() {
+    fn selected_server_ctl_addr_not_double_incremented() {
         // prod:3 active state (fresh base each time, as in the router)
         let base = test_state();
         let s = state_for_selected_server(&base, ServerSelection { is_prod: true, server_num: 3 });
-        assert_eq!(s.active_ctl_addr(&HeaderMap::new()), "127.0.0.1:15913");
+        assert_eq!(s.ctl_addr, "127.0.0.1:15913");
         // beta:2 active state
         let s = state_for_selected_server(&base, ServerSelection { is_prod: false, server_num: 2 });
-        assert_eq!(s.active_ctl_addr(&HeaderMap::new()), "127.0.0.1:15812");
+        assert_eq!(s.ctl_addr, "127.0.0.1:15812");
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use crate::app_state::{AppState, cookie_value};
+use crate::i18n::{Locale, locale_from_headers, t};
 use axum::{
-    http::HeaderMap,
-    response::{IntoResponse, Redirect, Response},
+    extract::{FromRequestParts, OriginalUri},
+    http::{HeaderMap, StatusCode, Uri, request::Parts},
+    response::{Html, IntoResponse, Redirect, Response},
 };
 use rand::{Rng, distributions::Alphanumeric};
 use std::{
@@ -100,14 +102,14 @@ pub(crate) fn validate_login(
     }
     pos += count * 64; // skip tokens
     let mut found_uid = None;
-    for i in 0..count {
+    for (i, name) in names.iter().enumerate().take(count) {
         let hash_end = data[pos..]
             .iter()
             .position(|b| *b == 0)
             .unwrap_or(257)
             .min(257);
         let hash_str = std::str::from_utf8(&data[pos..pos + hash_end]).unwrap_or("");
-        if names[i] == username {
+        if name == username {
             if !hash_str.is_empty() && bcrypt_verify(password, hash_str) {
                 found_uid = Some(i as i32 + 1);
             }
@@ -193,6 +195,28 @@ pub(crate) fn html_escape_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Returns `"; Secure"` when the client connection is HTTPS (per the
+/// `X-Forwarded-Proto` header set by the TLS-terminating reverse proxy) or
+/// when `GEAR_FORCE_SECURE_COOKIES=1` is set. Empty otherwise, so plain-HTTP
+/// localhost/dev access keeps working. Callers append the result to the cookie
+/// attribute string.
+pub(crate) fn secure_cookie_flag(headers: &HeaderMap) -> &'static str {
+    if std::env::var("GEAR_FORCE_SECURE_COOKIES").as_deref() == Ok("1") {
+        return "; Secure";
+    }
+    let forwarded = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .unwrap_or("");
+    if forwarded.eq_ignore_ascii_case("https") {
+        "; Secure"
+    } else {
+        ""
+    }
+}
+
 pub(crate) fn gc_sessions(max_age: Duration) -> usize {
     let store = SESSION_STORE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut sessions = store.lock().unwrap();
@@ -217,8 +241,90 @@ pub(crate) fn remove_session(session_id: &str) {
     store.lock().unwrap().remove(session_id);
 }
 
+pub(crate) const CSRF_FIELD: &str = "_csrf";
+
+/// Renders a hidden CSRF input for use inside a POST form.
+pub(crate) fn csrf_input(session_id: &str) -> String {
+    format!(
+        r#"<input type="hidden" name="{field}" value="{value}" />"#,
+        field = CSRF_FIELD,
+        value = html_escape_attr(session_id),
+    )
+}
+
+/// True when a submitted CSRF value equals the live session id.
+pub(crate) fn csrf_ok(session_id: &str, submitted: Option<&str>) -> bool {
+    submitted.is_some_and(|v| v == session_id)
+}
+
 pub(crate) fn is_admin(session: &Session) -> bool {
     is_admin_username(&session.username)
+}
+
+/// Authenticated request context produced by the [`AuthContext`] extractor.
+/// Bundles the session, the server-scoped [`AppState`] (per `gear_server`
+/// cookie), the resolved locale, and the opaque session id used as the CSRF
+/// token. Handlers that need authentication take this instead of repeating the
+/// `get_session` + `state_with_active_server` + `locale_from_headers` preamble.
+pub(crate) struct AuthContext {
+    pub(crate) session_id: String,
+    pub(crate) session: Session,
+    pub(crate) state: AppState,
+    pub(crate) locale: Locale,
+}
+
+impl AuthContext {
+    pub(crate) fn is_admin(&self) -> bool {
+        is_admin(&self.session)
+    }
+
+    /// Validates a submitted CSRF token against this session, returning a
+    /// `400` response on mismatch.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn require_csrf(&self, submitted: &str) -> Result<(), Response> {
+        if csrf_ok(&self.session_id, Some(submitted)) {
+            Ok(())
+        } else {
+            Err((StatusCode::BAD_REQUEST, Html("Invalid CSRF token")).into_response())
+        }
+    }
+
+    /// Resolves the player uid for this account on the selected server, or a
+    /// `404` response when the account has no save there.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn player_uid(&self) -> Result<u32, Response> {
+        crate::player_state::resolve_player_uid(&self.state, self.session.uid).ok_or_else(|| {
+            (StatusCode::NOT_FOUND, Html(t(self.locale, "player.not_found"))).into_response()
+        })
+    }
+}
+
+#[axum::async_trait]
+impl FromRequestParts<AppState> for AuthContext {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let headers = &parts.headers;
+        let Some((session_id, session)) = get_session(headers) else {
+            let uri = parts
+                .extensions
+                .get::<OriginalUri>()
+                .map(|original| original.0.clone())
+                .unwrap_or_else(|| Uri::from_static("/dashboard"));
+            return Err(redirect_to_login(&uri));
+        };
+        let active = crate::app_state::state_with_active_server(state, headers);
+        let locale = locale_from_headers(headers);
+        Ok(AuthContext {
+            session_id,
+            session,
+            state: active,
+            locale,
+        })
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use crate::remielle_save::EquipItemSave;
 use crate::{
-    app_state::{self, AppState},
-    auth::{get_session, html_escape_attr, redirect_to_login},
+    app_state::AppState,
+    auth::{AuthContext, csrf_input, html_escape_attr},
     ctl,
     data::{
         hakushin::{load_hakushin_data, to_asset_url},
@@ -11,24 +11,31 @@ use crate::{
         },
     },
     domain::discs::{
-        all_main_stat_keys, disk_main_base_value, disk_main_stat_options, disk_sub_base_value,
-        disk_sub_stat_options, normalize_disk_main_stat, stat_label, validate_sub_stats,
+        DISC_GENERATED_PROC_MAX, DISC_GENERATED_PROC_MIN, DISC_LEVEL_MAX, DISC_SLOT_COUNT,
+        DISC_STAR_MAX, DISC_SUB_COUNT, DISC_SUB_MAX_PROCS, all_main_stat_keys,
+        disk_main_base_value, disk_main_stat_options, disk_sub_base_value, disk_sub_stat_options,
+        normalize_disk_main_stat, pack_equip_properties, stat_label, stat_option_index,
+        validate_sub_stats,
     },
-    i18n::{Locale, locale_from_headers, t},
+    i18n::{Locale, t},
     player_state::{
         load_player_save, parse_slot_value, render_equip_substat_script, render_slot_options,
-        render_stat_select_options, render_sub_stat_rows, resolve_player_uid,
+        render_stat_select_options, render_sub_stat_rows,
     },
-    utils::{audit_log, shared_page_css, svg_data_uri},
+    utils::{audit_log, page_shell, svg_data_uri, u8_from_u32, u16_from_u32},
 };
 use axum::{
-    extract::{Form, OriginalUri, Path, RawForm, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Form, Path, RawForm},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect},
 };
 use rand::{Rng, seq::SliceRandom};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+
+const DISCS_PER_PAGE: usize = 50;
+
+type DiscProperties = [(u16, u16, u8); 5];
 
 #[derive(Deserialize)]
 pub(crate) struct EquipUpdateForm {
@@ -43,6 +50,7 @@ pub(crate) struct EquipUpdateForm {
     sub_proc_3: u32,
     sub_key_4: u32,
     sub_proc_4: u32,
+    _csrf: String,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +66,7 @@ pub(crate) struct AddEquipForm {
     sub_proc_3: u32,
     sub_key_4: u32,
     sub_proc_4: u32,
+    _csrf: String,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +74,7 @@ pub(crate) struct GenerateEquipForm {
     equip_set_id: u32,
     slot: Option<String>,
     count: u32,
+    _csrf: String,
 }
 
 fn equip_main_property(equip: &EquipItemSave) -> (u32, u32, u32) {
@@ -80,56 +90,92 @@ fn equip_sub_properties(equip: &EquipItemSave) -> Vec<(u32, u32, u32)> {
         .properties
         .iter()
         .skip(1)
-        .take(4)
+        .take(DISC_SUB_COUNT)
         .map(|p| (p.key, p.base_value, p.add_value))
         .collect()
 }
 
-fn render_error_page(error_label: &str, message: &str, locale: Locale) -> String {
+/// Normalizes the requested main stat for a slot, validates the requested
+/// secondary stats, and packs everything into the ctl wire layout. Shared by
+/// the disc edit and disc create handlers.
+fn resolve_disc_properties(
+    slot: u32,
+    requested_main_key: u32,
+    sub_keys: &[u32; DISC_SUB_COUNT],
+    sub_procs: &[u32; DISC_SUB_COUNT],
+) -> [(u16, u16, u8); 5] {
+    let main_key = normalize_disk_main_stat(slot, requested_main_key)
+        .unwrap_or_else(|| disk_main_stat_options(slot).first().copied().unwrap_or(0));
+    let (keys, base, add) = validate_sub_stats(main_key, sub_keys, sub_procs);
+    let main_base = disk_main_base_value(main_key).unwrap_or(0);
+    pack_equip_properties(main_key, main_base, &keys, &base, &add)
+}
+
+/// Renders the disc-set `<option>` list and the set-id -> image-url JSON that
+/// the disc preview `<script>` consumes. Shared by the new/generate pages.
+fn disc_options_and_images(state: &AppState, locale: Locale) -> (String, String) {
+    let options = render_disc_select_options(state, 0, locale);
+    let disc_images: HashMap<u32, String> = {
+        let h = load_hakushin_data(state, locale);
+        h.discs
+            .iter()
+            .map(|(id, entry)| {
+                let url = entry
+                    .image_local
+                    .as_deref()
+                    .map(to_asset_url)
+                    .unwrap_or_else(|| svg_data_uri(&entry.name));
+                (*id, url)
+            })
+            .collect()
+    };
+    let json = serde_json::to_string(&disc_images).unwrap_or_else(|_| "{}".to_string());
+    (options, json)
+}
+
+/// The live disc-image preview script shared by the new/generate pages.
+fn disc_preview_script(disc_images_json: &str) -> String {
     format!(
-        r#"<!doctype html>
-<html lang="{lang}">
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title}</title>
-    <style>{css}</style>
-</head>
-<body>
-    <div class="container">
-        <h1>{title}</h1>
-        <div class="panel" style="margin-top:16px;">
-            <div style="background:#3d1420;color:#fca5a5;border:1px solid #6b2136;padding:12px 16px;border-radius:8px;font-size:14px;">{message}</div>
-        </div>
-        <a href="/dashboard?tab=discs" class="back" style="margin-top:16px;">{back}</a>
-    </div>
-</body>
-</html>"#,
-        lang = locale.lang_attr(),
-        title = error_label,
-        css = shared_page_css(),
-        message = message,
-        back = t(locale, "disc.back"),
+        r#"<script>
+    var d = {disc_images_json};
+    var p = document.getElementById("disc_preview");
+    var s = document.getElementById("equip_set_id");
+    s.addEventListener("change", function() {{
+        var u = d[s.value];
+        if (u) {{ p.src = u; p.style.display = "block"; }}
+        else {{ p.style.display = "none"; }}
+    }});
+    </script>"#,
+        disc_images_json = disc_images_json,
     )
 }
 
+fn render_error_page(error_label: &str, message: &str, locale: Locale) -> String {
+    let inner = format!(
+        r#"        <h1>{title}</h1>
+        <div class="panel" style="margin-top:16px;">
+            <div style="background:#3d1420;color:#fca5a5;border:1px solid #6b2136;padding:12px 16px;border-radius:8px;font-size:14px;">{message}</div>
+        </div>
+        <a href="/dashboard?tab=discs" class="back" style="margin-top:16px;">{back}</a>"#,
+        title = error_label,
+        message = message,
+        back = t(locale, "disc.back"),
+    );
+    page_shell(error_label, locale, &inner)
+}
+
 pub(crate) async fn equip_edit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    auth: AuthContext,
     Path(equip_uid): Path<u32>,
-    original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, _session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
 
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&active_state, _session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-
-    let Some(save) = load_player_save(&active_state, uid) else {
+    let Some(save) = load_player_save(active_state, uid) else {
         return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
@@ -137,12 +183,12 @@ pub(crate) async fn equip_edit(
         return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
     };
 
-    let online = ctl::player_is_online(&active_state.active_ctl_addr(&headers), uid);
+    let online = ctl::player_is_online(&active_state.ctl_addr, uid);
 
     let level = equip.level;
     let star = equip.star;
     let equip_item_id = equip.id;
-    let hakushin = load_hakushin_data(&active_state, locale);
+    let hakushin = load_hakushin_data(active_state, locale);
     let equip_index = load_equip_template_index(&active_state.asset_dir);
     let set_id = equip_set_id(equip_item_id, &equip_index);
     let num_slot = equip_slot(equip_item_id, &equip_index);
@@ -163,39 +209,13 @@ pub(crate) async fn equip_edit(
     let normalized_main_key = normalize_disk_main_stat(num_slot, main_key)
         .unwrap_or_else(|| main_options.first().copied().unwrap_or(0));
     let sub_options = disk_sub_stat_options(normalized_main_key);
-    let mut sub_options_by_main = HashMap::new();
-    let mut label_map = HashMap::new();
-    for slot_id in 1..=6 {
-        let options = disk_main_stat_options(slot_id);
-        for key in options {
-            label_map
-                .entry(key)
-                .or_insert_with(|| stat_label(&state, locale, key));
-            let sub_opts = disk_sub_stat_options(key);
-            for sub_key in &sub_opts {
-                label_map
-                    .entry(*sub_key)
-                    .or_insert_with(|| stat_label(&state, locale, *sub_key));
-            }
-            sub_options_by_main.insert(key, sub_opts);
-        }
-    }
+    let (_, sub_options_by_main, label_map) = stat_option_index(active_state, locale);
     let sub_options_by_main_json = serde_json::to_string(&sub_options_by_main).unwrap_or_default();
     let label_map_json = serde_json::to_string(&label_map).unwrap_or_default();
     let script = render_equip_substat_script("{}", &sub_options_by_main_json, &label_map_json);
 
-    let body = format!(
-        r#"<!doctype html>
-<html lang="{lang}">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{edit_title}</title>
-  <style>{shared_css}</style>
-</head>
-<body>
-  <div class="container">
-        <div class="hero">
+    let inner = format!(
+        r#"        <div class="hero">
             <img src="{equip_img}" alt="{equip_name}" />
             <div>
                 <h1>{edit_title} {equip_name}</h1>
@@ -203,6 +223,7 @@ pub(crate) async fn equip_edit(
             </div>
         </div>
     <form method="post">
+      {csrf}
       <label>{level_label}</label>
       <input name="level" type="number" min="0" value="{level}" {disabled} />
       <label>{star_label}</label>
@@ -228,10 +249,7 @@ pub(crate) async fn equip_edit(
         <a href="/dashboard?tab=discs" class="back">{back_label}</a>
         {submit}
       </div>
-    </form>
-  </div>
-</body>
-</html>"#,
+    </form>"#,
         equip_uid = equip_uid,
         equip_item_id = equip_item_id,
         equip_name = html_escape_attr(&equip_name),
@@ -240,9 +258,9 @@ pub(crate) async fn equip_edit(
         level = level,
         star = star,
         main_options =
-            render_stat_select_options(&state, &main_options, normalized_main_key, locale),
+            render_stat_select_options(active_state, &main_options, normalized_main_key, locale),
         sub_stat_rows = render_sub_stat_rows(
-            &state,
+            active_state,
             &sub_props,
             &sub_options,
             normalized_main_key,
@@ -266,48 +284,48 @@ pub(crate) async fn equip_edit(
         stat_label_str = t(locale, "disc.stat"),
         sub_stats_heading = t(locale, "disc.sub_stats"),
         back_label = t(locale, "disc.back"),
-        shared_css = shared_page_css(),
-        lang = locale.lang_attr(),
+        csrf = csrf_input(&auth.session_id),
     );
 
-    Html(body).into_response()
+    Html(page_shell(t(locale, "disc.edit"), locale, &inner)).into_response()
 }
 
 pub(crate) async fn equip_update(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    auth: AuthContext,
     Path(equip_uid): Path<u32>,
-    original_uri: OriginalUri,
     Form(payload): Form<EquipUpdateForm>,
 ) -> impl IntoResponse {
-    let Some((_session_id, _session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    if let Err(response) = auth.require_csrf(&payload._csrf) {
+        return response;
+    }
+
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
 
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&active_state, _session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-
-    let addr = active_state.active_ctl_addr(&headers);
+    let addr = active_state.ctl_addr.clone();
     if !ctl::player_is_online(&addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
 
     let equip_index = load_equip_template_index(&active_state.asset_dir);
-    let save = load_player_save(&active_state, uid);
+    let save = load_player_save(active_state, uid);
 
-    let slot = save
+    // Ownership check: the disc must belong to this player's save. Without it
+    // a crafted POST could target an arbitrary equip_uid.
+    let Some(equip) = save
         .as_ref()
         .and_then(|s| s.equip.iter().find(|e| e.uid == equip_uid))
-        .map(|e| equip_slot(e.id, &equip_index))
-        .unwrap_or(1);
-    let main_key = normalize_disk_main_stat(slot, payload.main_key)
-        .unwrap_or_else(|| disk_main_stat_options(slot).first().copied().unwrap_or(0));
-
-    let (keys, base, add) = validate_sub_stats(
-        main_key,
+    else {
+        return (StatusCode::NOT_FOUND, Html(t(locale, "disc.not_found"))).into_response();
+    };
+    let slot = equip_slot(equip.id, &equip_index);
+    let properties = resolve_disc_properties(
+        slot,
+        payload.main_key,
         &[
             payload.sub_key_1,
             payload.sub_key_2,
@@ -322,24 +340,25 @@ pub(crate) async fn equip_update(
         ],
     );
 
-    let main_base = disk_main_base_value(main_key).unwrap_or(0);
-    let mut properties = [(0u16, 0u16, 0u8); 5];
-    properties[0] = (main_key as u16, main_base as u16, 0);
-    for i in 0..keys.len() {
-        properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
-    }
+    // Server-side range validation: reject out-of-range values instead of
+    // silently truncating via `as u8`. Discs cap at level 15 and star 5.
+    let Some(level) = u8_from_u32(payload.level).filter(|&l| l <= DISC_LEVEL_MAX as u8) else {
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.level_out_of_range"))).into_response();
+    };
+    let Some(star) = u8_from_u32(payload.star).filter(|&s| s <= DISC_STAR_MAX as u8) else {
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.star_out_of_range"))).into_response();
+    };
 
     if let Err(e) = ctl::mod_equip(
-        &active_state.active_ctl_addr(&headers),
+        &addr,
         uid,
         equip_uid,
-        payload.level as u8,
-        payload.star as u8,
+        level,
+        star,
         &properties,
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
-    let addr = active_state.active_ctl_addr(&headers);
     if let Err(e) = ctl::save_player(&addr, uid) {
         return Html(format!("ctl error (save): {e}")).into_response();
     }
@@ -348,63 +367,27 @@ pub(crate) async fn equip_update(
 }
 
 pub(crate) async fn equip_new(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
+    auth: AuthContext,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
-
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-    if !ctl::player_is_online(&active_state.active_ctl_addr(&headers), uid) {
+    if !ctl::player_is_online(&active_state.ctl_addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
 
-    let options = render_disc_select_options(&active_state, 0, locale);
-    let disc_images: HashMap<u32, String> = {
-        let h = load_hakushin_data(&active_state, locale);
-        h.discs
-            .iter()
-            .map(|(id, entry)| {
-                let url = entry
-                    .image_local
-                    .as_deref()
-                    .map(to_asset_url)
-                    .unwrap_or_else(|| svg_data_uri(&entry.name));
-                (*id, url)
-            })
-            .collect()
-    };
-    let disc_images_json = serde_json::to_string(&disc_images).unwrap_or_else(|_| "{}".to_string());
+    let (options, disc_images_json) = disc_options_and_images(active_state, locale);
     let slot_options = render_slot_options(locale, 1);
-    let main_options = render_stat_select_options(&state, &disk_main_stat_options(1), 0, locale);
+    let main_options =
+        render_stat_select_options(active_state, &disk_main_stat_options(1), 0, locale);
     let sub_options = disk_sub_stat_options(0);
-    let sub_stat_rows = render_sub_stat_rows(&state, &[], &sub_options, 0, locale, true);
+    let sub_stat_rows = render_sub_stat_rows(active_state, &[], &sub_options, 0, locale, true);
 
-    let mut main_options_by_slot = HashMap::new();
-    let mut sub_options_by_main = HashMap::new();
-    let mut label_map = HashMap::new();
-    for slot in 1..=6 {
-        let options = disk_main_stat_options(slot);
-        for key in &options {
-            label_map
-                .entry(*key)
-                .or_insert_with(|| stat_label(&state, locale, *key));
-            let sub_opts = disk_sub_stat_options(*key);
-            for sub_key in &sub_opts {
-                label_map
-                    .entry(*sub_key)
-                    .or_insert_with(|| stat_label(&state, locale, *sub_key));
-            }
-            sub_options_by_main.insert(*key, sub_opts);
-        }
-        main_options_by_slot.insert(slot, options);
-    }
+    let (main_options_by_slot, sub_options_by_main, label_map) =
+        stat_option_index(active_state, locale);
     let main_options_by_slot_json =
         serde_json::to_string(&main_options_by_slot).unwrap_or_default();
     let sub_options_by_main_json = serde_json::to_string(&sub_options_by_main).unwrap_or_default();
@@ -422,21 +405,11 @@ pub(crate) async fn equip_new(
     let main_stat_heading = t(locale, "disc.main_stat");
     let sub_stats_heading = t(locale, "disc.sub_stats");
     let create_label = t(locale, "disc.create");
-    let lang = locale.lang_attr();
 
-    let body = format!(
-        r#"<!doctype html>
-<html lang="{lang}">
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{new_title}</title>
-    <style>{shared_css}</style>
-</head>
-<body>
-    <div class="container">
-        <h1>{new_title}</h1>
+    let inner = format!(
+        r#"        <h1>{new_title}</h1>
         <form method="post">
+            {csrf}
             <div>
                 <img id="disc_preview" class="preview-img" />
                 <label>{disc_set_label}</label>
@@ -470,25 +443,13 @@ pub(crate) async fn equip_new(
             {script}
             <button>{create_label}</button>
         </form>
-    </div>
-    <script>
-    var d = {disc_images_json};
-    var p = document.getElementById("disc_preview");
-    var s = document.getElementById("equip_set_id");
-    s.addEventListener("change", function() {{
-        var u = d[s.value];
-        if (u) {{ p.src = u; p.style.display = "block"; }}
-        else {{ p.style.display = "none"; }}
-    }});
-    </script>
-</body>
-</html>"#,
+    {preview_script}"#,
         options = options,
         slot_options = slot_options,
         main_options = main_options,
         sub_stat_rows = sub_stat_rows,
         script = script,
-        disc_images_json = disc_images_json,
+        preview_script = disc_preview_script(&disc_images_json),
         new_title = new_title,
         disc_set_label = disc_set_label,
         slot_label = slot_label,
@@ -496,30 +457,29 @@ pub(crate) async fn equip_new(
         main_stat_heading = main_stat_heading,
         sub_stats_heading = sub_stats_heading,
         create_label = create_label,
-        shared_css = shared_page_css(),
-        lang = lang,
+        csrf = csrf_input(&auth.session_id),
     );
 
-    Html(body).into_response()
+    Html(page_shell(new_title, locale, &inner)).into_response()
 }
 
 pub(crate) async fn equip_add(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
+    auth: AuthContext,
     Form(payload): Form<AddEquipForm>,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    if let Err(response) = auth.require_csrf(&payload._csrf) {
+        return response;
+    }
+
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let session = &auth.session;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
 
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-
-    let addr = active_state.active_ctl_addr(&headers);
+    let addr = active_state.ctl_addr.clone();
     if !ctl::player_is_online(&addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
@@ -532,17 +492,9 @@ pub(crate) async fn equip_add(
     };
     let item_id = force_disc_fourth_digit(item_id);
 
-    let main_key =
-        normalize_disk_main_stat(payload.equip_slot, payload.main_key).unwrap_or_else(|| {
-            disk_main_stat_options(payload.equip_slot)
-                .first()
-                .copied()
-                .unwrap_or(0)
-        });
-    let main_base = disk_main_base_value(main_key).unwrap_or(0);
-
-    let (keys, base, add) = validate_sub_stats(
-        main_key,
+    let properties = resolve_disc_properties(
+        payload.equip_slot,
+        payload.main_key,
         &[
             payload.sub_key_1,
             payload.sub_key_2,
@@ -557,29 +509,26 @@ pub(crate) async fn equip_add(
         ],
     );
 
-    let mut properties = [(0u16, 0u16, 0u8); 5];
-    properties[0] = (main_key as u16, main_base as u16, 0);
-    for i in 0..keys.len() {
-        properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
-    }
+    let Some(item_id) = u16_from_u32(item_id) else {
+        return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.invalid_set_slot"))).into_response();
+    };
 
     if let Err(e) = ctl::create_equip(
-        &active_state.active_ctl_addr(&headers),
+        &addr,
         uid,
-        item_id as u16,
-        15,
+        item_id,
+        DISC_LEVEL_MAX as u8,
         1,
         &properties,
     ) {
         return Html(format!("ctl error: {e}")).into_response();
     }
-    let addr = active_state.active_ctl_addr(&headers);
     if let Err(e) = ctl::save_player(&addr, uid) {
         return Html(format!("ctl error (save): {e}")).into_response();
     }
 
     audit_log(
-        &state.root_dir,
+        &active_state.root_dir,
         &session.username,
         session.uid,
         "equip_add",
@@ -589,61 +538,32 @@ pub(crate) async fn equip_add(
 }
 
 pub(crate) async fn equip_generate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
+    auth: AuthContext,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
-
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-    if !ctl::player_is_online(&active_state.active_ctl_addr(&headers), uid) {
+    if !ctl::player_is_online(&active_state.ctl_addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
 
-    let options = render_disc_select_options(&active_state, 0, locale);
-    let disc_images: HashMap<u32, String> = {
-        let h = load_hakushin_data(&active_state, locale);
-        h.discs
-            .iter()
-            .map(|(id, entry)| {
-                let url = entry
-                    .image_local
-                    .as_deref()
-                    .map(to_asset_url)
-                    .unwrap_or_else(|| svg_data_uri(&entry.name));
-                (*id, url)
-            })
-            .collect()
-    };
-    let disc_images_json = serde_json::to_string(&disc_images).unwrap_or_else(|_| "{}".to_string());
+    let (options, disc_images_json) = disc_options_and_images(active_state, locale);
     let gen_title = t(locale, "disc.generate");
     let gen_desc = t(locale, "disc.generate_desc");
     let disc_set_label = t(locale, "disc.set");
     let slot_label = t(locale, "disc.slot");
     let count_label = t(locale, "disc.count");
     let gen_btn = t(locale, "disc.generate_btn");
-    let lang = locale.lang_attr();
     let slot_options = render_generate_slot_options(None, locale);
-    let body = format!(
-        r#"<!doctype html>
-<html lang="{lang}">
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{gen_title}</title>
-    <style>{shared_css}</style>
-</head>
-<body>
-    <div class="container">
-        <h1>{gen_title}</h1>
+
+    let inner = format!(
+        r#"        <h1>{gen_title}</h1>
         <div class="meta">{gen_desc}</div>
         <form method="post">
+            {csrf}
             <div>
                 <img id="disc_preview" class="preview-img" />
                 <label>{disc_set_label}</label>
@@ -665,47 +585,33 @@ pub(crate) async fn equip_generate(
             </div>
             <button>{gen_btn}</button>
         </form>
-    </div>
-    <script>
-    var d = {disc_images_json};
-    var p = document.getElementById("disc_preview");
-    var s = document.getElementById("equip_set_id");
-    s.addEventListener("change", function() {{
-        var u = d[s.value];
-        if (u) {{ p.src = u; p.style.display = "block"; }}
-        else {{ p.style.display = "none"; }}
-    }});
-    </script>
-</body>
-</html>"#,
+    {preview_script}"#,
         options = options,
         slot_options = slot_options,
         gen_title = gen_title,
         gen_desc = gen_desc,
-        disc_images_json = disc_images_json,
         disc_set_label = disc_set_label,
         slot_label = slot_label,
         count_label = count_label,
         gen_btn = gen_btn,
-        shared_css = shared_page_css(),
-        lang = lang,
+        preview_script = disc_preview_script(&disc_images_json),
+        csrf = csrf_input(&auth.session_id),
     );
 
-    Html(body).into_response()
+    Html(page_shell(gen_title, locale, &inner)).into_response()
 }
 
 pub(crate) async fn equip_generate_submit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
+    auth: AuthContext,
     Form(payload): Form<GenerateEquipForm>,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
-    };
+    if let Err(response) = auth.require_csrf(&payload._csrf) {
+        return response;
+    }
 
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let session = &auth.session;
 
     if payload.count == 0 || payload.count > 49 {
         return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.count_range"))).into_response();
@@ -715,11 +621,12 @@ pub(crate) async fn equip_generate_submit(
         return (StatusCode::BAD_REQUEST, Html(t(locale, "disc.slot_range"))).into_response();
     }
 
-    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
     };
 
-    let addr = active_state.active_ctl_addr(&headers);
+    let addr = active_state.ctl_addr.clone();
     if !ctl::player_is_online(&addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
@@ -728,7 +635,7 @@ pub(crate) async fn equip_generate_submit(
     let count_to_gen = payload.count as usize;
     let mut rng = rand::thread_rng();
 
-    let mut entries: Vec<(u16, [(u16, u16, u8); 5])> = Vec::with_capacity(count_to_gen);
+    let mut entries: Vec<ctl::EquipBatchEntry> = Vec::with_capacity(count_to_gen);
     for _ in 0..count_to_gen {
         let (item_id, properties_tup) = match generate_random_disc(
             payload.equip_set_id,
@@ -754,21 +661,20 @@ pub(crate) async fn equip_generate_submit(
     }
 
     if let Err(e) = ctl::create_equips(
-        &active_state.active_ctl_addr(&headers),
+        &addr,
         uid,
-        15,
+        DISC_LEVEL_MAX as u8,
         1,
         &entries,
     ) {
         return Html(format!("ctl error (generate): {e}")).into_response();
     }
-    let addr = active_state.active_ctl_addr(&headers);
     if let Err(e) = ctl::save_player(&addr, uid) {
         return Html(format!("ctl error (save): {e}")).into_response();
     }
 
     audit_log(
-        &state.root_dir,
+        &active_state.root_dir,
         &session.username,
         session.uid,
         "equip_generate",
@@ -778,29 +684,40 @@ pub(crate) async fn equip_generate_submit(
 }
 
 pub(crate) async fn equip_delete_submit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
+    auth: AuthContext,
     RawForm(raw_form): RawForm,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
-    };
-
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
     let raw_form_text = String::from_utf8_lossy(&raw_form).into_owned();
+    if let Err(response) =
+        auth.require_csrf(&parse_raw_form_field(&raw_form_text, "_csrf").unwrap_or_default())
+    {
+        return response;
+    }
+
+    let active_state = &auth.state;
+    let locale = auth.locale;
+    let session = &auth.session;
+    let uid = match auth.player_uid() {
+        Ok(uid) => uid,
+        Err(response) => return response,
+    };
     let selected: Vec<u32> = parse_selected_equip_uids(&raw_form_text);
 
-    let addr = &active_state.active_ctl_addr(&headers);
+    // Ownership check: only delete discs that actually belong to this save.
+    let owned: Vec<u32> = load_player_save(active_state, uid)
+        .map(|s| {
+            let owned_ids: std::collections::HashSet<u32> =
+                s.equip.iter().map(|e| e.uid).collect();
+            selected.into_iter().filter(|id| owned_ids.contains(id)).collect()
+        })
+        .unwrap_or_default();
+
+    let addr = &active_state.ctl_addr;
     if !ctl::player_is_online(addr, uid) {
         return Html(t(locale, "player.offline")).into_response();
     }
     let mut deleted = 0usize;
-    for equip_uid in selected {
+    for equip_uid in owned {
         if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
             deleted += 1;
         }
@@ -810,54 +727,10 @@ pub(crate) async fn equip_delete_submit(
     }
 
     audit_log(
-        &state.root_dir,
+        &active_state.root_dir,
         &session.username,
         session.uid,
         "equip_delete",
-        &format!("deleted {} discs", deleted),
-    );
-    Redirect::to(&format!("/dashboard?tab=discs&deleted={}", deleted)).into_response()
-}
-
-pub(crate) async fn equip_delete_all_unlocked(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    original_uri: OriginalUri,
-) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
-        return redirect_to_login(&original_uri.0);
-    };
-
-    let active_state = app_state::state_with_active_server(&state, &headers);
-    let locale = locale_from_headers(&headers);
-    let Some(uid) = resolve_player_uid(&active_state, session.uid) else {
-        return (StatusCode::NOT_FOUND, Html(t(locale, "player.not_found"))).into_response();
-    };
-    let save = load_player_save(&active_state, uid);
-    let uids: Vec<u32> = save
-        .iter()
-        .flat_map(|s| s.equip.iter().map(|e| e.uid))
-        .collect();
-
-    let addr = &active_state.active_ctl_addr(&headers);
-    if !ctl::player_is_online(addr, uid) {
-        return Html(t(locale, "player.offline")).into_response();
-    }
-    let mut deleted = 0usize;
-    for equip_uid in uids {
-        if ctl::delete_equip(addr, uid, equip_uid).is_ok() {
-            deleted += 1;
-        }
-    }
-    if let Err(e) = ctl::save_player(addr, uid) {
-        return Html(format!("ctl error (save): {e}")).into_response();
-    }
-
-    audit_log(
-        &state.root_dir,
-        &session.username,
-        session.uid,
-        "equip_delete_all_unlocked",
         &format!("deleted {} discs", deleted),
     );
     Redirect::to(&format!("/dashboard?tab=discs&deleted={}", deleted)).into_response()
@@ -869,15 +742,25 @@ fn parse_selected_equip_uids(raw_form: &str) -> Vec<u32> {
         let mut parts = pair.splitn(2, '=');
         let key = parts.next().unwrap_or("");
         let value = parts.next().unwrap_or("");
-        if key == "equip_uids" || key == "equip_uids[]" || key == "equip_uids%5B%5D" {
-            if let Ok(id) = value.parse::<u32>() {
+        if (key == "equip_uids" || key == "equip_uids[]" || key == "equip_uids%5B%5D")
+            && let Ok(id) = value.parse::<u32>() {
                 ids.push(id);
             }
-        }
     }
     ids.sort_unstable();
     ids.dedup();
     ids
+}
+
+fn parse_raw_form_field(raw_form: &str, key: &str) -> Option<String> {
+    for pair in raw_form.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let k = parts.next().unwrap_or("");
+        if k == key {
+            return Some(parts.next().unwrap_or("").to_string());
+        }
+    }
+    None
 }
 
 fn generate_random_disc(
@@ -886,9 +769,9 @@ fn generate_random_disc(
     equip_index: &EquipTemplateIndex,
     rng: &mut impl Rng,
     locale: Locale,
-) -> Result<(u32, [(u16, u16, u8); 5]), String> {
+) -> Result<(u32, DiscProperties), String> {
     let mut slots = Vec::new();
-    for slot in 1..=6 {
+    for slot in 1..=DISC_SLOT_COUNT {
         if resolve_equip_item_id(set_id, slot, equip_index).is_some() {
             slots.push(slot);
         }
@@ -902,7 +785,7 @@ fn generate_random_disc(
             .choose(rng)
             .ok_or_else(|| t(locale, "disc.no_slots").to_string())?
     } else {
-        if !(1..=6).contains(&selected_slot) {
+        if !(1..=DISC_SLOT_COUNT).contains(&selected_slot) {
             return Err(t(locale, "disc.slot_range").to_string());
         }
         if !slots.contains(&selected_slot) {
@@ -921,23 +804,23 @@ fn generate_random_disc(
     let main_base = disk_main_base_value(main_key).unwrap_or(0);
 
     let mut allowed_subs = disk_sub_stat_options(main_key);
-    if allowed_subs.len() < 4 {
+    if allowed_subs.len() < DISC_SUB_COUNT {
         return Err(t(locale, "disc.not_enough_substats").to_string());
     }
     allowed_subs.shuffle(rng);
-    let keys: Vec<u32> = allowed_subs.into_iter().take(4).collect();
+    let keys: Vec<u32> = allowed_subs.into_iter().take(DISC_SUB_COUNT).collect();
 
     let base: Vec<u32> = keys
         .iter()
         .map(|key| disk_sub_base_value(*key).unwrap_or(0))
         .collect();
-    let mut add = vec![1u32; 4];
-    let target_total = rng.gen_range(8..=9);
+    let mut add = vec![1u32; DISC_SUB_COUNT];
+    let target_total = rng.gen_range(DISC_GENERATED_PROC_MIN..=DISC_GENERATED_PROC_MAX);
     while add.iter().sum::<u32>() < target_total {
         let candidates: Vec<usize> = add
             .iter()
             .enumerate()
-            .filter_map(|(idx, value)| if *value < 6 { Some(idx) } else { None })
+            .filter_map(|(idx, value)| if *value < DISC_SUB_MAX_PROCS { Some(idx) } else { None })
             .collect();
         if candidates.is_empty() {
             break;
@@ -948,15 +831,12 @@ fn generate_random_disc(
         add[idx] += 1;
     }
 
-    let mut properties = [(0u16, 0u16, 0u8); 5];
-    properties[0] = (main_key as u16, main_base as u16, 0);
-    for i in 0..keys.len() {
-        properties[i + 1] = (keys[i] as u16, base[i] as u16, add[i] as u8);
-    }
+    let properties = pack_equip_properties(main_key, main_base, &keys, &base, &add);
 
     Ok((item_id, properties))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_equip_cards(
     state: &AppState,
     uid: u32,
@@ -968,6 +848,7 @@ pub(crate) fn render_equip_cards(
     page: u32,
     online: bool,
     deleted_notice: Option<u32>,
+    csrf: &str,
 ) -> String {
     let hakushin = load_hakushin_data(state, locale);
     let equip_index = load_equip_template_index(&state.asset_dir);
@@ -1051,32 +932,29 @@ pub(crate) fn render_equip_cards(
     }
 
     cards_data.retain(|(_, _, _, set_id, slot, main_stat_key)| {
-        if let Some(fid) = filter_set_id {
-            if *set_id != fid {
+        if let Some(fid) = filter_set_id
+            && *set_id != fid {
                 return false;
             }
-        }
-        if let Some(fs) = filter_slot {
-            if *slot != fs {
+        if let Some(fs) = filter_slot
+            && *slot != fs {
                 return false;
             }
-        }
-        if let Some(fm) = filter_main_stat {
-            if *main_stat_key != fm {
+        if let Some(fm) = filter_main_stat
+            && *main_stat_key != fm {
                 return false;
             }
-        }
         true
     });
 
     cards_data.sort_by_key(|(equip_item_id, equip_uid, _, _, _, _)| (*equip_item_id, *equip_uid));
     let total = cards_data.len();
 
-    let per_page: usize = 50;
+    let per_page: usize = DISCS_PER_PAGE;
     let total_pages = if total == 0 {
         1
     } else {
-        (total + per_page - 1) / per_page
+        total.div_ceil(per_page)
     };
     let page = page.clamp(1, total_pages as u32);
     let start = ((page - 1) as usize) * per_page;
@@ -1134,16 +1012,15 @@ pub(crate) fn render_equip_cards(
     };
     if delete_mode && online {
         let delete_panel = format!(
-            "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">{}</button><button class=\"danger\" type=\"submit\" formaction=\"/equip/delete-all-unlocked\" onclick=\"return confirm('{}');\">{}</button><a href=\"/dashboard?tab=discs\">{}</a></div></div>",
+            "<div class=\"panel\"><h3>{}</h3><div style=\"display:flex; gap:8px; flex-wrap:wrap;\"><button class=\"danger\" type=\"submit\">{}</button><a href=\"/dashboard?tab=discs\">{}</a></div></div>",
             t(locale, "disc.delete_mode"),
             t(locale, "disc.delete_selected"),
-            t(locale, "disc.delete_all_unlocked"),
-            t(locale, "disc.delete_all_unlocked"),
             t(locale, "disc.cancel"),
         );
         format!(
-            "{notice}{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{delete_panel}{filter_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
+            "{notice}{add_panel}<form class=\"delete-form\" method=\"post\" action=\"/equip/delete\" onsubmit=\"return confirm('{}');\">{csrf_hidden}{delete_panel}{filter_panel}<div class=\"cards\">{cards}</div></form>{pagination_html}",
             t(locale, "disc.delete_selected"),
+            csrf_hidden = csrf_input(csrf),
             pagination_html = pagination_html,
         )
     } else {
@@ -1176,7 +1053,7 @@ fn render_generate_slot_options(selected: Option<u32>, locale: Locale) -> String
         if selected.is_none() { " selected" } else { "" },
         t(locale, "disc.not_selected"),
     ));
-    for slot in 1..=6 {
+    for slot in 1..=DISC_SLOT_COUNT {
         html.push_str(&format!(
             "<option value=\"{}\"{}>{} {}</option>",
             slot,
@@ -1224,6 +1101,7 @@ fn render_disc_select_options(state: &AppState, selected_id: u32, locale: Locale
     html
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_disc_filter_panel(
     state: &AppState,
     locale: Locale,
@@ -1270,7 +1148,7 @@ fn render_disc_filter_panel(
             "<option value=\"\">{}</option>",
             t(locale, "disc.filter_all")
         );
-        for s in 1..=6 {
+        for s in 1..=DISC_SLOT_COUNT {
             let sel = if filter_slot == Some(s) {
                 " selected"
             } else {
@@ -1368,6 +1246,7 @@ fn render_disc_filter_panel(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_pagination(
     locale: Locale,
     page: u32,
@@ -1383,7 +1262,7 @@ fn render_pagination(
     let prev_label = t(locale, "disc.prev");
     let next_label = t(locale, "disc.next");
 
-    let per_page: usize = 50;
+    let per_page: usize = DISCS_PER_PAGE;
     let start = ((page - 1) as usize) * per_page + 1;
     let end = total.min(start + per_page - 1);
 

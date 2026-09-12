@@ -186,12 +186,14 @@ pub fn create_equip(
 /// Create multiple equips in a single control packet (ExtendedOperation).
 /// `entries` holds `(item_id, properties)` pairs, all created at `level`/`star`.
 /// Must not exceed `MAX_CREATE_EQUIP_BATCH` entries (mtu-limited single packet).
+pub type EquipBatchEntry = (u16, [(u16, u16, u8); 5]);
+
 pub fn create_equips(
     addr: &str,
     player_uid: u32,
     level: u8,
     star: u8,
-    entries: &[(u16, [(u16, u16, u8); 5])],
+    entries: &[EquipBatchEntry],
 ) -> Result<(), String> {
     let count = entries.len();
     if count == 0 {
@@ -268,6 +270,18 @@ pub fn save_player(addr: &str, player_uid: u32) -> Result<(), String> {
     buf[..HEADER_SIZE].copy_from_slice(&make_header(10, 0));
     let mut p = HEADER_SIZE;
     write_u32_le(&mut buf, &mut p, player_uid);
+    send_and_ack(addr, Some(player_uid), &buf[..p])
+}
+
+/// Unlock an avatar the player does not own yet. Created with the server's
+/// default max level/rank/talents/skills; edit it afterwards to customize.
+pub fn create_avatar(addr: &str, player_uid: u32, avatar_id: u32) -> Result<(), String> {
+    // header(8) + player_uid(4) + avatar_id(4) = 16
+    let mut buf = [0u8; 16];
+    buf[..HEADER_SIZE].copy_from_slice(&make_header(11, 0));
+    let mut p = HEADER_SIZE;
+    write_u32_le(&mut buf, &mut p, player_uid);
+    write_u32_le(&mut buf, &mut p, avatar_id);
     send_and_ack(addr, Some(player_uid), &buf[..p])
 }
 
@@ -388,11 +402,10 @@ pub fn presence_of(addr: &str, player_uid: u32) -> Presence {
 /// not depend on a specific player being online (e.g. hadal zone edits).
 pub fn server_reachable(addr: &str) -> bool {
     let cache = SERVER_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((reachable, at)) = cache.lock().unwrap().get(addr).map(|(r, a)| (*r, *a)) {
-        if at.elapsed() < PROBE_CACHE_TTL {
+    if let Some((reachable, at)) = cache.lock().unwrap().get(addr).map(|(r, a)| (*r, *a))
+        && at.elapsed() < PROBE_CACHE_TTL {
             return reachable;
         }
-    }
     // Probe with a synthetic player_uid (0) that the server will never have in
     // its uid_map; a reply of any kind means the server is up, silence means down.
     let probe = probe_presence(addr, 0);

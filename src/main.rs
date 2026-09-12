@@ -1,8 +1,9 @@
 use axum::{
     Router,
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, OriginalUri, Query, State},
     http::{HeaderMap, header},
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -28,16 +29,16 @@ use app_state::{
     AppState, ServerSelection, active_server_selection, state_for_selected_server,
 };
 use assets::asset_handler;
-use auth::{get_session, is_admin, redirect_to_login, sanitize_next_path, url_encode_component};
+use auth::{csrf_input, get_session, is_admin, redirect_to_login, sanitize_next_path, secure_cookie_flag, url_encode_component};
 use ctl::Presence;
 use i18n::{Locale, locale_from_headers, t};
 use player_state::{player_uid_for, resolve_player_uid};
 use routes::admin::{admin_delete_update, admin_update_hadal_zone, admin_upload_update};
 use routes::auth::{login, login_page, logout, register, register_page, switch_server};
-use routes::avatar::{avatar_edit, avatar_update, render_avatar_cards};
+use routes::avatar::{avatar_add, avatar_edit, avatar_new, avatar_update, render_avatar_cards};
 use routes::challenges::{da_detail, render_da_shiyu_status, shiyu_detail};
 use routes::equip::{
-    equip_add, equip_delete_all_unlocked, equip_delete_submit, equip_edit, equip_generate,
+    equip_add, equip_delete_submit, equip_edit, equip_generate,
     equip_generate_submit, equip_new, equip_update, render_equip_cards,
 };
 use routes::weapon::{render_weapon_cards, weapon_add, weapon_edit, weapon_new, weapon_update};
@@ -112,8 +113,9 @@ async fn main() {
         .route("/register", get(register_page).post(register))
         .route("/dashboard", get(dashboard))
         .route("/switch-server", get(switch_server))
-        .route("/logout", get(logout))
+        .route("/logout", post(logout))
         .route("/avatar/:id", get(avatar_edit).post(avatar_update))
+        .route("/avatar/new", get(avatar_new).post(avatar_add))
         .route("/weapon/:uid", get(weapon_edit).post(weapon_update))
         .route("/weapon/new", get(weapon_new).post(weapon_add))
         .route("/equip/:uid", get(equip_edit).post(equip_update))
@@ -124,10 +126,6 @@ async fn main() {
         )
         .route("/equip/delete", post(equip_delete_submit))
         .route(
-            "/equip/delete-all-unlocked",
-            post(equip_delete_all_unlocked),
-        )
-        .route(
             "/admin/upload-update",
             post(admin_upload_update).layer(DefaultBodyLimit::disable()),
         )
@@ -137,6 +135,7 @@ async fn main() {
         .route("/shiyu/:id", get(shiyu_detail))
         .route("/set-lang", get(set_language))
         .route("/assets/*path", get(asset_handler))
+        .route("/favicon.png", get(favicon))
         .layer(CompressionLayer::new())
         .with_state(state);
 
@@ -159,13 +158,29 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+/// Serves the embedded site favicon (PNG). Favicons are cached aggressively.
+const FAVICON_PNG: &[u8] = include_bytes!("../favicon.png");
+
+async fn favicon() -> Response {
+    let mut response = Response::new(Body::from(Bytes::from_static(FAVICON_PNG)));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("image/png"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("public, max-age=86400"),
+    );
+    response
+}
+
 async fn dashboard(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<TabQuery>,
     original_uri: OriginalUri,
 ) -> impl IntoResponse {
-    let Some((_session_id, session)) = get_session(&headers) else {
+    let Some((session_id, session)) = get_session(&headers) else {
         return redirect_to_login(&original_uri.0);
     };
 
@@ -315,6 +330,18 @@ async fn dashboard(
         opts = lang_opts,
     );
 
+    let logout_label = t(locale, "header.logout");
+    let desktop_logout = format!(
+        "<form class=\"desktop-logout\" method=\"post\" action=\"/logout\" style=\"margin:0;\">{csrf}<button type=\"submit\" style=\"padding:6px 10px; border:0; border-radius:8px; background:#ef4444; color:#fff; cursor:pointer; font-size:12px; font-weight:700; font-family:inherit;\">{label}</button></form>",
+        csrf = csrf_input(&session_id),
+        label = logout_label,
+    );
+    let mobile_logout = format!(
+        "<form method=\"post\" action=\"/logout\" style=\"text-align:center; margin:0;\">{csrf}<button type=\"submit\" style=\"width:100%; padding:6px 10px; border:0; border-radius:8px; background:#ef4444; color:#fff; cursor:pointer; font-size:12px; font-weight:700; font-family:inherit;\">{label}</button></form>",
+        csrf = csrf_input(&session_id),
+        label = logout_label,
+    );
+
     // When restricted, the visible tabs are Updates + Status (in that order),
     // and Updates is the default for any other requested tab.
     let effective_tab = if !has_any_save && tab != "updates" && tab != "status" {
@@ -343,6 +370,7 @@ async fn dashboard(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.png" />
   <title>Gear Editor{title_suffix}</title>
   <style>
       body {{ font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; overflow-x: hidden; }}
@@ -431,7 +459,7 @@ async fn dashboard(
         <div class="desktop-mode" style="display:flex; gap:4px; flex-wrap:wrap;">
             {server_pills}
         </div>
-        <a href="/logout" class="desktop-logout" style="padding:6px 10px; border-radius:8px; background:#ef4444; color:#fff; text-decoration:none; font-size:12px; font-weight:700;">{logout_label}</a>
+        {desktop_logout}
     </div>
 </header>
 <div class="mobile-overlay" onclick="this.classList.remove('open'); document.querySelector('.mobile-drawer').classList.remove('open');"></div>
@@ -447,7 +475,7 @@ async fn dashboard(
         <div style="display:flex; gap:4px; width:100%; flex-wrap:wrap;">
             {server_pills}
         </div>
-        <a href="/logout" style="text-align:center; padding:6px 10px; border-radius:8px; background:#ef4444; color:#fff; text-decoration:none; font-size:12px; font-weight:700;">{logout_label}</a>
+        {mobile_logout}
     </div>
 </aside>
 <main class="content">
@@ -461,8 +489,8 @@ async fn dashboard(
         tab_status = tab_status,
         content = match uid {
             None => match effective_tab {
-                "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-                "status" => render_status_tab(&active_state, 0, locale, is_admin, ctl::server_reachable(&active_state.ctl_addr), current_sel.is_prod),
+                "updates" => render_client_updates_panel(&state, server_host, locale, is_admin, &session_id),
+                "status" => render_status_tab(&active_state, 0, locale, is_admin, ctl::server_reachable(&active_state.ctl_addr), current_sel.is_prod, &session_id),
                 _ => {
                     format!(
                         "<div class=\"panel\" style=\"display:block;\"><p class=\"meta\">{}</p></div>",
@@ -471,10 +499,10 @@ async fn dashboard(
                 }
             },
             Some(uid) => {
-                let online = match presences[current_sel_index(current_sel)] {
-                    Presence::Online => true,
-                    _ => false,
-                };
+                let online = matches!(
+                    presences[current_sel_index(current_sel)],
+                    Presence::Online
+                );
                 let server_up = ctl::server_reachable(&active_state.ctl_addr);
                 match effective_tab {
                     "weapons" => render_weapon_cards(
@@ -496,10 +524,11 @@ async fn dashboard(
                         filter_page,
                         online,
                         deleted_notice,
+                        &session_id,
                     ),
-                    "updates" => render_client_updates_panel(&state, server_host, locale, is_admin),
-                    "status" => render_status_tab(&active_state, uid, locale, is_admin, server_up, current_sel.is_prod),
-                    _ => render_avatar_cards(&active_state, uid, locale),
+                    "updates" => render_client_updates_panel(&state, server_host, locale, is_admin, &session_id),
+                    "status" => render_status_tab(&active_state, uid, locale, is_admin, server_up, current_sel.is_prod, &session_id),
+                    _ => render_avatar_cards(&active_state, uid, locale, online),
                 }
             }
         },
@@ -526,27 +555,38 @@ async fn dashboard(
         nav_client_updates = t(locale, "nav.client_updates"),
         nav_status = t(locale, "nav.status"),
         signed_in_as = t(locale, "header.signed_in_as"),
-        logout_label = t(locale, "header.logout"),
+        desktop_logout = desktop_logout,
+        mobile_logout = mobile_logout,
     );
 
     Html(body).into_response()
 }
 
 async fn set_language(
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Query(params): Query<SetLangQuery>,
 ) -> impl IntoResponse {
-    let locale = params.lang.trim().parse::<Locale>().unwrap_or(Locale::En);
+    let lang_code = params
+        .lang
+        .trim()
+        .parse::<Locale>()
+        .unwrap_or(Locale::En)
+        .code();
     let next = params
         .next
         .as_deref()
         .and_then(sanitize_next_path)
         .unwrap_or_else(|| "/dashboard".to_string());
 
+    let secure = secure_cookie_flag(&headers);
     let mut response = Redirect::to(&next).into_response();
-    let header_value = format!("gear_lang={}; Path=/; SameSite=Lax", locale.code())
-        .parse()
-        .unwrap();
+    let header_value = format!(
+        "gear_lang={lang}; Path=/; SameSite=Lax{secure}",
+        lang = lang_code,
+        secure = secure,
+    )
+    .parse()
+    .unwrap();
     response
         .headers_mut()
         .insert(header::SET_COOKIE, header_value);
@@ -569,6 +609,6 @@ fn server_index(sel: &ServerSelection) -> usize {
     }
 }
 
-fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool, server_up: bool, is_prod: bool) -> String {
-    render_da_shiyu_status(state, uid, locale, is_admin, server_up, is_prod)
+fn render_status_tab(state: &AppState, uid: u32, locale: Locale, is_admin: bool, server_up: bool, is_prod: bool, csrf: &str) -> String {
+    render_da_shiyu_status(state, uid, locale, is_admin, server_up, is_prod, csrf)
 }
