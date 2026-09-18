@@ -1,3 +1,8 @@
+# ⚠️ DISCLAIMER
+# THIS REPOSITORY IS NOT INTENDED FOR PUBLIC USE
+# THIS REPOSITORY IS NOT AN OFFICIAL PROJECT OF XEON OR REVERSED ROOMS, AND IS NOT AFFILIATED WITH, ENDORSED BY, OR MAINTAINED BY THEM
+# NO USER SUPPORT OR ASSISTANCE WILL BE PROVIDED FOR THIS REPOSITORY
+
 # gear_editor
 
 Web admin panel for the remielle game server. All mutations are sent to a running server via the UDP control protocol (ctl); PlayerSave files are read from disk only for card views.
