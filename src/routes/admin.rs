@@ -19,7 +19,6 @@ pub(crate) struct DeleteForm {
 
 #[derive(Deserialize)]
 pub(crate) struct UpdateHadalZoneForm {
-    server: u32,
     hadal_id: String,
     new_zone: u32,
     _csrf: String,
@@ -43,13 +42,6 @@ pub(crate) async fn admin_update_hadal_zone(
     }
 
     let sel = crate::app_state::active_server_selection(&headers);
-
-    if !(1..=3).contains(&payload.server) {
-        return Html("Invalid server number (1-3)").into_response();
-    }
-    if !sel.is_prod && payload.server != 1 {
-        return Html("Invalid server number (beta is server 1)").into_response();
-    }
 
     // Beta uses the new multi-entrance HadalZone indices; prod uses the old set.
     let entrance_id = if sel.is_prod {
@@ -98,7 +90,7 @@ pub(crate) async fn admin_update_hadal_zone(
         "update_hadal_zone",
         &format!(
             "server={} {} -> {}",
-            payload.server, payload.hadal_id, payload.new_zone
+            sel.cookie_value(), payload.hadal_id, payload.new_zone
         ),
     );
 

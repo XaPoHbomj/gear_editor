@@ -444,7 +444,6 @@ pub(crate) fn render_da_shiyu_status(
             &format!("{} {}", t(locale, label_key), num),
             dummy_path,
             kind,
-            1,
             hadal_id,
             is_admin,
             server_up,
@@ -465,7 +464,6 @@ pub(crate) fn render_da_shiyu_status(
 }
 
 fn render_hadal_edit_form(
-    server: u32,
     hadal_id: &str,
     locale: Locale,
     server_up: bool,
@@ -475,13 +473,11 @@ fn render_hadal_edit_form(
     format!(
         r#"<form method="post" action="/admin/update-hadal-zone" style="margin-top:10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;{dim}">
             {csrf_input}
-            <input type="hidden" name="server" value="{server}">
             <input type="hidden" name="hadal_id" value="{hadal_id}">
             <input type="number" name="new_zone" placeholder="{zone_placeholder}" required{disabled_attr} style="width:100px; padding:5px 8px; border-radius:6px; border:1px solid #2a3140; background:#121620; color:#e6e6e6; font-size:12px;">
             <button type="submit"{disabled_attr} style="padding:5px 10px; border:0; border-radius:6px; background:#4c7dff; color:#fff; font-weight:600; font-size:12px; cursor:pointer;">{update_label}</button>
         </form>"#,
         csrf_input = csrf_input(csrf),
-        server = server,
         hadal_id = hadal_id,
         update_label = t(locale, "status.update_zone"),
         zone_placeholder = t(locale, "status.zone_id"),
@@ -502,14 +498,13 @@ fn render_status_card(
     label: &str,
     details_path: &FsPath,
     kind: &str,
-    server: u32,
     hadal_id: &str,
     is_admin: bool,
     server_up: bool,
     csrf: &str,
 ) -> String {
     let admin_form = if is_admin {
-        render_hadal_edit_form(server, hadal_id, locale, server_up, csrf)
+        render_hadal_edit_form(hadal_id, locale, server_up, csrf)
     } else {
         String::new()
     };

@@ -87,7 +87,7 @@ pub(crate) async fn avatar_edit(
       <div class="row">
         <div>
           <label>{level_label}</label>
-          <input name="level" type="number" min="1" value="{level}" {disabled} />
+          <input name="level" type="number" min="1" max="60" value="{level}" {disabled} />
         </div>
         <div>
                     <label>{mindscapes_label}</label>
@@ -158,6 +158,14 @@ pub(crate) async fn avatar_update(
         return (StatusCode::NOT_FOUND, Html(t(locale, "avatar.not_found"))).into_response();
     }
     let current = current.unwrap();
+
+    if !avatar_values_valid(&payload) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(t(locale, "avatar.values_out_of_range")),
+        )
+            .into_response();
+    }
 
     let current_level = current.level;
     let current_talents = current.talents;
@@ -308,6 +316,17 @@ pub(crate) async fn avatar_new(
     );
 
     Html(page_shell(t(locale, "avatar.new"), locale, &inner)).into_response()
+}
+
+fn avatar_values_valid(payload: &AvatarUpdateForm) -> bool {
+    (1..=60).contains(&payload.level)
+        && payload.unlocked_talent_num <= 6
+        && (1..=12).contains(&payload.skill_common_attack)
+        && (1..=12).contains(&payload.skill_special_attack)
+        && (1..=12).contains(&payload.skill_evade)
+        && (1..=12).contains(&payload.skill_cooperate_skill)
+        && (1..=7).contains(&payload.core_ability)
+        && (1..=12).contains(&payload.skill_assist_skill)
 }
 
 pub(crate) async fn avatar_add(
@@ -543,7 +562,7 @@ fn render_skill_inputs(locale: Locale, skill_levels: &[u32], online: bool) -> St
             _ => unreachable!(),
         };
         html.push_str(&format!(
-            "<div><label>{label}</label><input name=\"{name}\" type=\"number\" min=\"1\" value=\"{value}\" {disabled} /></div>",
+            "<div><label>{label}</label><input name=\"{name}\" type=\"number\" min=\"1\" max=\"12\" value=\"{value}\" {disabled} /></div>",
             label = t(locale, label_key),
         ));
     }
