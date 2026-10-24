@@ -287,7 +287,11 @@ fn list_update_files(dir: &FsPath) -> Vec<UpdateFileInfo> {
     let mut files = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
+        if !path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip") || ext.eq_ignore_ascii_case("ziff"))
+        {
             continue;
         }
         let Ok(metadata) = entry.metadata() else {

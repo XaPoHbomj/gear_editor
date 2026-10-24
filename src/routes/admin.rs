@@ -110,6 +110,12 @@ fn safe_upload_name(file_name: &str) -> Option<String> {
     Some(base)
 }
 
+fn is_supported_update_file_name(file_name: &str) -> bool {
+    file_name.rsplit_once('.').is_some_and(|(_, ext)| {
+        ext.eq_ignore_ascii_case("zip") || ext.eq_ignore_ascii_case("ziff")
+    })
+}
+
 pub(crate) async fn admin_upload_update(
     auth: AuthContext,
     headers: HeaderMap,
@@ -171,8 +177,8 @@ pub(crate) async fn admin_upload_update(
         let Some(file_name) = safe_upload_name(&raw_name) else {
             continue;
         };
-        if !file_name.ends_with(".zip") {
-            continue;
+        if !is_supported_update_file_name(&file_name) {
+            return Html(t(locale, "updates.upload_error_extension")).into_response();
         }
         let dest = update_dir.join(&file_name);
         if !dest.starts_with(&update_dir) {
@@ -300,5 +306,15 @@ mod tests {
     fn safe_upload_name_rejects_basename_mismatch() {
         assert_eq!(safe_upload_name("x/../patch.zip"), None);
         assert_eq!(safe_upload_name(""), None);
+    }
+
+    #[test]
+    fn update_file_name_accepts_zip_and_ziff() {
+        assert!(is_supported_update_file_name("patch.zip"));
+        assert!(is_supported_update_file_name("patch.ZIP"));
+        assert!(is_supported_update_file_name("zzz_3.3.4_3.4.1.ziff"));
+        assert!(!is_supported_update_file_name("patch.7z"));
+        assert!(!is_supported_update_file_name("patch"));
+        assert!(!is_supported_update_file_name("patch.zip.part"));
     }
 }
