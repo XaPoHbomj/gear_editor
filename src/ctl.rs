@@ -387,6 +387,11 @@ pub fn player_is_online(addr: &str, player_uid: u32) -> bool {
     presence_of(addr, player_uid) == Presence::Online
 }
 
+/// Uncached online check for uploads that must not race a live server save.
+pub fn player_is_online_now(addr: &str, player_uid: u32) -> bool {
+    probe_presence(addr, player_uid) == Presence::Online
+}
+
 /// Presence of the player on the given server, cached for PROBE_CACHE_TTL.
 pub fn presence_of(addr: &str, player_uid: u32) -> Presence {
     if let Some(presence) = cached_presence(addr, player_uid) {

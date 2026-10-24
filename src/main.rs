@@ -32,7 +32,7 @@ use assets::asset_handler;
 use auth::{csrf_input, get_session, is_admin, redirect_to_login, sanitize_next_path, secure_cookie_flag, url_encode_component};
 use ctl::Presence;
 use i18n::{Locale, locale_from_headers, t};
-use player_state::{player_uid_for, resolve_player_uid};
+use player_state::{player_uid_for, player_uid_from_map, resolve_player_uid};
 use routes::admin::{admin_delete_update, admin_update_hadal_zone, admin_upload_update};
 use routes::auth::{login, login_page, logout, register, register_page, switch_server};
 use routes::avatar::{avatar_add, avatar_edit, avatar_new, avatar_update, render_avatar_cards};
@@ -41,6 +41,7 @@ use routes::equip::{
     equip_add, equip_delete_submit, equip_edit, equip_generate,
     equip_generate_submit, equip_new, equip_update, render_equip_cards,
 };
+use routes::saves::{render_save_upload_panel, upload_save};
 use routes::weapon::{render_weapon_cards, weapon_add, weapon_edit, weapon_new, weapon_update};
 use updates::render_client_updates_panel;
 
@@ -55,6 +56,7 @@ struct TabQuery {
     weapon_class: Option<String>,
     weapon_rarity: Option<String>,
     deleted: Option<u32>,
+    saved: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -129,6 +131,12 @@ async fn main() {
             "/admin/upload-update",
             post(admin_upload_update).layer(DefaultBodyLimit::disable()),
         )
+        .route(
+            "/save/upload",
+            post(upload_save).layer(DefaultBodyLimit::max(
+                (crate::remielle_save::MAX_SAVE_FILE_BYTES as usize) + 1024 * 1024,
+            )),
+        )
         .route("/admin/delete-update", post(admin_delete_update))
         .route("/admin/update-hadal-zone", post(admin_update_hadal_zone))
         .route("/da/:id", get(da_detail))
@@ -193,6 +201,7 @@ async fn dashboard(
     let filter_weapon_class = query.weapon_class.unwrap_or_default();
     let filter_weapon_rarity = query.weapon_rarity.unwrap_or_default();
     let deleted_notice = query.deleted;
+    let saved_notice = query.saved.unwrap_or(0) == 1;
 
     let current_sel = active_server_selection(&headers);
     let active_state = state_for_selected_server(&state, current_sel);
@@ -342,9 +351,13 @@ async fn dashboard(
         label = logout_label,
     );
 
-    // When restricted, the visible tabs are Updates + Status (in that order),
+    // When restricted, the visible tabs are Updates + Save Upload + Status,
     // and Updates is the default for any other requested tab.
-    let effective_tab = if !has_any_save && tab != "updates" && tab != "status" {
+    let effective_tab = if !has_any_save
+        && tab != "updates"
+        && tab != "status"
+        && tab != "saves"
+    {
         "updates"
     } else {
         tab.as_str()
@@ -353,6 +366,7 @@ async fn dashboard(
     let tab_weapons = if effective_tab == "weapons" { "active" } else { "" };
     let tab_discs = if effective_tab == "discs" { "active" } else { "" };
     let tab_updates = if effective_tab == "updates" { "active" } else { "" };
+    let tab_saves = if effective_tab == "saves" { "active" } else { "" };
     let tab_status = if effective_tab == "status" { "active" } else { "" };
 
     let title_suffix = {
@@ -451,6 +465,7 @@ async fn dashboard(
         {nav_weapons_link}
         {nav_discs_link}
         <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
+        <a class="{tab_saves}" href="/dashboard?tab=saves">{nav_save_upload}</a>
         <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     </div>
     <div class="desktop-actions" style="display:flex; align-items:center; gap:10px;">
@@ -468,6 +483,7 @@ async fn dashboard(
     {nav_weapons_link}
     {nav_discs_link}
     <a class="{tab_updates}" href="/dashboard?tab=updates">{nav_client_updates}</a>
+    <a class="{tab_saves}" href="/dashboard?tab=saves">{nav_save_upload}</a>
     <a class="{tab_status}" href="/dashboard?tab=status">{nav_status}</a>
     <div style="margin-top:16px; padding-top:12px; border-top:1px solid #2a3140; display:flex; flex-direction:column; gap:10px; width:100%; box-sizing:border-box;">
         <div class="meta">{signed_in_as} {username}</div>
@@ -490,6 +506,13 @@ async fn dashboard(
         content = match uid {
             None => match effective_tab {
                 "updates" => render_client_updates_panel(&state, server_host, locale, is_admin, &session_id),
+                "saves" => {
+                    let save_uid = player_uid_from_map(&active_state, account_uid);
+                    let save_online = save_uid.is_some_and(|u| {
+                        ctl::player_is_online_now(&active_state.ctl_addr, u)
+                    });
+                    render_save_upload_panel(&active_state, save_uid, locale, &session_id, &current_sel.label(), save_online, saved_notice)
+                }
                 "status" => render_status_tab(&active_state, 0, locale, is_admin, ctl::server_reachable(&active_state.ctl_addr), current_sel.is_prod, &session_id),
                 _ => {
                     format!(
@@ -527,6 +550,7 @@ async fn dashboard(
                         &session_id,
                     ),
                     "updates" => render_client_updates_panel(&state, server_host, locale, is_admin, &session_id),
+                    "saves" => render_save_upload_panel(&active_state, Some(uid), locale, &session_id, &current_sel.label(), online, saved_notice),
                     "status" => render_status_tab(&active_state, uid, locale, is_admin, server_up, current_sel.is_prod, &session_id),
                     _ => render_avatar_cards(&active_state, uid, locale, online),
                 }
@@ -553,6 +577,7 @@ async fn dashboard(
             String::new()
         },
         nav_client_updates = t(locale, "nav.client_updates"),
+        nav_save_upload = t(locale, "nav.save_upload"),
         nav_status = t(locale, "nav.status"),
         signed_in_as = t(locale, "header.signed_in_as"),
         desktop_logout = desktop_logout,

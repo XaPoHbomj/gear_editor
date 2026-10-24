@@ -3,4 +3,5 @@ pub(crate) mod auth;
 pub(crate) mod avatar;
 pub(crate) mod challenges;
 pub(crate) mod equip;
+pub(crate) mod saves;
 pub(crate) mod weapon;

@@ -15,7 +15,8 @@ Web admin panel for the remielle game server. All mutations are sent to a runnin
 | W-Engines (weapons) | Level, star, refine | Yes | No | Yes |
 | Drive Discs | Main/sub stats, level, star | Yes, single & bulk generate | Yes, single & delete-all-unlocked | Yes |
 | DA/Shiyu Status | Zone ID via ctl (admin only) | No | No | Detail view |
-| Client Updates | No | Upload patch .zip | Remove | File listing |
+| Client Updates | No | Upload patch .zip/.ziff | Remove | File listing |
+| Save Upload | No | Upload USD_<UID>.bin (validated, renamed to the account UID) | No | Current save info |
 
 All edits require the player to be **online** on the selected server. Mutations are gated on a live presence check (see [Online check](#online-check)) both in the UI (inputs disabled) and server-side on every POST.
 
@@ -182,6 +183,7 @@ src/
     equip.rs       # Disc edit/new/generate/delete, cards
     challenges.rs  # DA/Shiyu details + status tab
     admin.rs       # Client update upload/delete + hadal zone editing
+    saves.rs       # Save upload: validation, atomic write, single .bak backup
 ```
 
 ## Performance

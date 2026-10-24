@@ -195,6 +195,21 @@ pub(crate) fn parse_slot_value(value: &str) -> u32 {
 /// Resolve the player UID for this account on the given server, if the account
 /// has ever logged in there (a save exists on that server).
 pub(crate) fn player_uid_for(state: &AppState, account_uid: i32) -> Option<u32> {
+    let candidate = player_uid_from_map(state, account_uid)?;
+    if state
+        .state_dir
+        .join(format!("USD_{candidate}.bin"))
+        .exists()
+    {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// Resolve the player UID from GENERAL_DATA.bin without requiring the save file
+/// to exist. Used by save uploads so a missing save can be restored.
+pub(crate) fn player_uid_from_map(state: &AppState, account_uid: i32) -> Option<u32> {
     let base_uid = state.base_player_uid.max(1);
     let map_path = state.state_dir.join("GENERAL_DATA.bin");
     let data = fs::read(&map_path).ok()?;
@@ -207,14 +222,7 @@ pub(crate) fn player_uid_for(state: &AppState, account_uid: i32) -> Option<u32> 
         let uid_bytes: [u8; 8] = data[start..start + 8].try_into().unwrap();
         let mapped_uid = u64::from_le_bytes(uid_bytes);
         if mapped_uid == account_uid as u64 {
-            let candidate = base_uid + i as u32;
-            if state
-                .state_dir
-                .join(format!("USD_{candidate}.bin"))
-                .exists()
-            {
-                return Some(candidate);
-            }
+            return Some(base_uid + i as u32);
         }
     }
     None

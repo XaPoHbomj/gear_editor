@@ -626,6 +626,126 @@ fn decode_varint_list(buf: &[u8]) -> Vec<u32> {
     list
 }
 
+pub(crate) const MAX_SAVE_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+const MAX_AVATARS: usize = 200;
+const MAX_BUDDIES: usize = 100;
+const MAX_WEAPONS: usize = 2_000;
+const MAX_EQUIPS: usize = 3_000;
+const MAX_EQUIP_PROPERTIES: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveValidationError {
+    Empty,
+    Corrupt,
+    MissingBasic,
+    NoAvatars,
+    InvalidId,
+    TooManyAvatars,
+    TooManyBuddies,
+    TooManyWeapons,
+    TooManyEquips,
+    DuplicateAvatar,
+    DuplicateBuddy,
+    DuplicateWeapon,
+    DuplicateEquip,
+    TooManyProperties,
+}
+
+impl SaveValidationError {
+    pub(crate) fn i18n_key(self) -> &'static str {
+        match self {
+            Self::Empty => "saves.error.empty",
+            Self::Corrupt => "saves.error.corrupt",
+            Self::MissingBasic => "saves.error.missing_basic",
+            Self::NoAvatars => "saves.error.no_avatars",
+            Self::InvalidId => "saves.error.invalid_id",
+            Self::TooManyAvatars => "saves.error.too_many_avatars",
+            Self::TooManyBuddies => "saves.error.too_many_buddies",
+            Self::TooManyWeapons => "saves.error.too_many_weapons",
+            Self::TooManyEquips => "saves.error.too_many_equips",
+            Self::DuplicateAvatar => "saves.error.duplicate_avatar",
+            Self::DuplicateBuddy => "saves.error.duplicate_buddy",
+            Self::DuplicateWeapon => "saves.error.duplicate_weapon",
+            Self::DuplicateEquip => "saves.error.duplicate_equip",
+            Self::TooManyProperties => "saves.error.too_many_properties",
+        }
+    }
+}
+
+pub(crate) fn validate_player_save(buf: &[u8]) -> Result<PlayerSave, SaveValidationError> {
+    use std::collections::HashSet;
+
+    if buf.is_empty() {
+        return Err(SaveValidationError::Empty);
+    }
+    let save = decode_player_save(buf).ok_or(SaveValidationError::Corrupt)?;
+    let basic = save.basic.as_ref().ok_or(SaveValidationError::MissingBasic)?;
+    if basic.avatar_id == 0 {
+        return Err(SaveValidationError::InvalidId);
+    }
+    if save.avatar.is_empty() {
+        return Err(SaveValidationError::NoAvatars);
+    }
+    if save.avatar.len() > MAX_AVATARS {
+        return Err(SaveValidationError::TooManyAvatars);
+    }
+    if save.buddy.len() > MAX_BUDDIES {
+        return Err(SaveValidationError::TooManyBuddies);
+    }
+    if save.weapon.len() > MAX_WEAPONS {
+        return Err(SaveValidationError::TooManyWeapons);
+    }
+    if save.equip.len() > MAX_EQUIPS {
+        return Err(SaveValidationError::TooManyEquips);
+    }
+
+    let mut avatar_ids = HashSet::with_capacity(save.avatar.len());
+    for avatar in &save.avatar {
+        if avatar.id == 0 {
+            return Err(SaveValidationError::InvalidId);
+        }
+        if !avatar_ids.insert(avatar.id) {
+            return Err(SaveValidationError::DuplicateAvatar);
+        }
+    }
+
+    let mut buddy_ids = HashSet::with_capacity(save.buddy.len());
+    for buddy in &save.buddy {
+        if buddy.id == 0 {
+            return Err(SaveValidationError::InvalidId);
+        }
+        if !buddy_ids.insert(buddy.id) {
+            return Err(SaveValidationError::DuplicateBuddy);
+        }
+    }
+
+    let mut weapon_uids = HashSet::with_capacity(save.weapon.len());
+    for weapon in &save.weapon {
+        if weapon.id == 0 {
+            return Err(SaveValidationError::InvalidId);
+        }
+        if !weapon_uids.insert(weapon.uid) {
+            return Err(SaveValidationError::DuplicateWeapon);
+        }
+    }
+
+    let mut equip_uids = HashSet::with_capacity(save.equip.len());
+    for equip in &save.equip {
+        if equip.id == 0 {
+            return Err(SaveValidationError::InvalidId);
+        }
+        if equip.properties.len() > MAX_EQUIP_PROPERTIES {
+            return Err(SaveValidationError::TooManyProperties);
+        }
+        if !equip_uids.insert(equip.uid) {
+            return Err(SaveValidationError::DuplicateEquip);
+        }
+    }
+
+    Ok(save)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,5 +846,27 @@ mod tests {
             assert_eq!(item.properties.len(), 5, "equip id {} must have 5 properties", item.id);
             assert!(item.properties[0].key > 0, "main property key must be set");
         }
+    }
+
+    #[test]
+    fn fixture_passes_save_validation() {
+        let data = std::fs::read("tests/fixtures_USD_100.bin").unwrap();
+        let save = validate_player_save(&data).expect("fixture must be valid");
+        assert_eq!(save.avatar.len(), 65);
+        assert_eq!(save.weapon.len(), 100);
+        assert_eq!(save.equip.len(), 8);
+        assert_eq!(save.buddy.len(), 43);
+    }
+
+    #[test]
+    fn empty_and_garbage_saves_are_rejected() {
+        assert_eq!(
+            validate_player_save(&[]).unwrap_err(),
+            SaveValidationError::Empty
+        );
+        assert_eq!(
+            validate_player_save(&[0xff, 0xff, 0xff]).unwrap_err(),
+            SaveValidationError::Corrupt
+        );
     }
 }
